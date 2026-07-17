@@ -9,8 +9,10 @@ vim ライクな GTK4/WebKitGTK 6 ベースのブラウザ(Rust)。設計は `do
 
 - `just test` — `cargo test`(GTK 不要の純粋ロジックのみで完結すること)
 - `just lint` — `cargo clippy -- -D warnings`(警告ゼロ必須)
+- `just coverage` — `cargo llvm-cov` で純粋ロジックの region/line カバレッジを **100%** に強制
+  (`main.rs` は除外)。未テストの `match` アームを機械的に検出するゲート。
 - `just fmt-check` / `just fmt` — フォーマット確認 / 適用
-- `just ci` — `fmt-check → lint → test → build` を通す(PR 前に必ず緑にする)
+- `just ci` — `fmt-check → lint → coverage → build` を通す(PR 前に必ず緑にする)
 
 ## ワークフロー
 

@@ -339,4 +339,29 @@ mod tests {
         assert_eq!(outcome.propagation, Propagation::Stop);
         assert_eq!(pending, None);
     }
+
+    // --- 単独キーのバインド表(§7.4)の網羅 ---
+
+    #[test]
+    fn single_key_bindings() {
+        let cases = [
+            ('h', Action::ScrollLeft),
+            ('j', Action::ScrollDown),
+            ('k', Action::ScrollUp),
+            ('l', Action::ScrollRight),
+            ('G', Action::ScrollBottom),
+            ('H', Action::Back),
+            ('L', Action::Forward),
+            ('r', Action::Reload),
+            ('i', Action::EnterMode(Mode::Insert)),
+            (':', Action::EnterMode(Mode::Command)),
+            ('f', Action::EnterMode(Mode::Hint)),
+        ];
+        for (ch, action) in cases {
+            let (outcome, pending) = normal(None, KeyInput::Char(ch));
+            assert_eq!(outcome.action, Some(action), "key {ch:?}");
+            assert_eq!(outcome.propagation, Propagation::Stop, "key {ch:?}");
+            assert_eq!(pending, None, "key {ch:?}");
+        }
+    }
 }
