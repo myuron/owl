@@ -9,6 +9,20 @@ const DUCKDUCKGO_SEARCH: &str = "https://duckduckgo.com/?q=";
 const HTTP_SCHEME: &str = "http://";
 const HTTPS_SCHEME: &str = "https://";
 
+/// 起動引数が無いときの初期 URL(設計書 §13-3)。
+const BLANK_URI: &str = "about:blank";
+
+/// 起動引数から初期 URL を決める(設計書 §13-3)。GTK 非依存の純粋関数。
+///
+/// 第 1 引数(`arg`)があればそれを、無ければ `about:blank` を返す。
+/// M1 では生 URL を素通しする(`:open` の補完規則 §11 = `parse_open_input`
+/// の適用は M4。§13-3 は最終的に補完規則を通す想定だが、todo サイクル 3 冒頭の
+/// とおり M1 では前倒し表示のため生 URL のまま渡す)。実際の `load_uri` は
+/// 呼び出し側(`main`/`webview`)が担う。
+pub fn initial_uri(arg: Option<&str>) -> &str {
+    arg.unwrap_or(BLANK_URI)
+}
+
 /// `:open <input>` の入力を解釈して遷移先 URL を返す(`None` = 空入力)。
 ///
 /// 入力を trim 後、規則 1→5 を上から順に適用する(設計書 §11):
@@ -106,7 +120,7 @@ fn percent_encode(s: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_open_input;
+    use super::{initial_uri, parse_open_input};
 
     // --- 規則 1: 前処理(trim・空入力)---
 
@@ -349,5 +363,23 @@ mod tests {
             parse_open_input("localhost:8080"),
             Some("http://localhost:8080".to_string())
         );
+    }
+
+    // --- §13-3: 起動引数からの初期 URL 決定 ---
+
+    #[test]
+    fn s13_first_arg_is_initial_uri() {
+        // 第 1 引数があればそれが初期 URL。M1 は生 URL を素通し
+        // (補完規則 §11 の適用は M4。todo サイクル 3 冒頭)。
+        assert_eq!(
+            initial_uri(Some("https://example.com")),
+            "https://example.com"
+        );
+    }
+
+    #[test]
+    fn s13_no_arg_is_about_blank() {
+        // 引数が無ければ about:blank。
+        assert_eq!(initial_uri(None), "about:blank");
     }
 }
