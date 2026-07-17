@@ -77,7 +77,95 @@
 
 ---
 
-## 完了条件
+## サイクル 3: M1 スケルトン(GUI 結線)
+
+design.md §16 のマイルストーン **M1** を実装タスクへ展開する。ゴールは
+「ウィンドウ + WebView でハードコード URL が表示され、`nix build` が通る」
+(§16)。同時に **`webkit6` crate の実用性(§17 の技術リスク)をコンパイル
+レベルで検証する**最初の実ビルドを兼ねる。
+
+**このサイクルは TDD ではない。** GTK/WebKit を含むため自動ユニットテストの
+対象外(design §14)。検証は `nix build` の通過と手動確認(`docs/checklist.md`)
+で行う。純粋ロジック(`command.rs`/`keys.rs`)は M3/M4 で結線されるまで
+`#![allow(dead_code)]` のまま据え置く。
+
+**スコープ境界(M1 で“やらない”ことを固定する):** モード/キー処理(§6・§7)は
+M3、`:open`/コマンド(§11)は M4、hint(§9)は M5、TLS Fail・エラーページ・
+クラッシュ復帰・ポップアップ抑制・DL キャンセル(§8.3〜8.6)は M7。M1 は
+「表示されるだけ」の殻に徹する。
+
+### 3-1. ビルド依存の追加(design §2・§15)
+
+- [ ] `Cargo.toml` に `gtk4`(§2: `^0.11`)と `webkit6`(§2: `0.6.x`)を追加する
+      (実際の最新整合バージョンは実装時に確認し、design §2 の指定に合わせる)
+- [ ] `flake.nix` の devShell(`devShells.default`)に `pkgs.gtk4` /
+      `pkgs.webkitgtk_6_0` / `pkgs.pkg-config` を追加する
+- [ ] `nix/rust.nix` の `buildRustPackage` に以下を追加する(§15):
+  - [ ] `nativeBuildInputs = [ pkg-config wrapGAppsHook4 ]`(引数に追加で受け取る)
+  - [ ] `buildInputs = [ gtk4 webkitgtk_6_0 ]`
+- [ ] `nix develop` に入って `cargo build` が通ることを確認する(§15 の基本ループ)
+
+### 3-2. カバレッジ/CI ゲートの GTK 除外(Justfile)
+
+- [ ] `coverage` の `--ignore-filename-regex` を `main\.rs` から
+      GTK 依存ファイル(`main\.rs`・`window\.rs`・`webview\.rs`)も除外する形へ広げる
+      — GTK 依存コードは region/line 100% ゲートの対象外(純粋ロジックのみを 100% に保つ)
+- [ ] `just coverage` が緑のままであること(サイクル 1・2 のカバレッジが 100% を維持)を確認する
+
+### 3-3. `webkit6` シグナル存在確認(§16・§17 のリスク前倒し)
+
+- [ ] M7 で使う予定の §8 のシグナル/API が **コンパイルレベルで存在する**ことを確認する
+      (実装はしない。存在しなければ §2 のフォールバック再検討 or 設計改訂の判断材料にする):
+  - [ ] `WebView::connect_create`(§8.4 ポップアップ抑制)
+  - [ ] `connect_load_failed` / `load-failed-with-tls-errors`(§8.3・§8.6)
+  - [ ] `connect_web_process_terminated`(§8.6 クラッシュ復帰)
+  - [ ] `NetworkSession::connect_download_started` / `set_tls_errors_policy`(§8.5・§8.3)
+  - [ ] 欠落があれば `docs/design.md §17` の表へ追記し、対処方針を書く
+
+### 3-4. `main.rs`: Application 生成と起動フロー(§4・§13)
+
+- [ ] `mod window;` / `mod webview;` を追加する
+- [ ] `gtk::Application::new(Some("dev.myuron.owl"), NON_UNIQUE)` を生成する(§13-1)
+- [ ] `activate` シグナルでウィンドウを構築する(§13-2)
+- [ ] `std::env::args` の第 1 引数があればその URL、なければ `about:blank` を初期 URL にする(§13-3)
+      — M1 では `parse_open_input` は未結線でよい(補完規則の適用は M4)。生 URL をそのまま渡す
+- [ ] `println!("Hello, world!")` を置き換える
+
+### 3-5. `window.rs`: ウィンドウとレイアウト(§4・§5)
+
+- [ ] `gtk::ApplicationWindow` を生成する
+- [ ] 直下に縦 `gtk::Box` を置き、`webkit6::WebView`(`vexpand = true`)を追加する(§5-1)
+- [ ] ステータスバー(§5-2)・コマンドライン(§5-3)は **M1 ではプレースホルダも省略可**
+      (本実装はステータスバー = M2、コマンドライン = M4)。ここで足すなら空の枠に留める
+- [ ] `window.present()` で表示する
+
+### 3-6. `webview.rs`: WebView 生成と設定(§4・§8.7)
+
+- [ ] `webkit6::NetworkSession` を生成する(§8.2: data=`user_data_dir()/owl`、
+      cache=`user_cache_dir()/owl`。M1 は最小結線でよく、Cookie 永続化の作り込みは M7)
+- [ ] NetworkSession を紐付けて `webkit6::WebView` を生成する
+- [ ] `webkit6::Settings` で `enable_developer_extras = true` のみ明示する(§8.7)
+- [ ] `web_view.load_uri(初期 URL)` でページを表示する
+- [ ] 起動パスで同期 I/O は XDG ディレクトリ作成以外行わない(§13-4)
+
+### 3-7. 手動確認(docs/checklist.md)
+
+- [ ] `docs/checklist.md` に M1 の確認項目を追加する(design §14: マイルストーンごとの手動確認)
+  - [ ] `nix build` が成功する(§16 の M1 完了条件)
+  - [ ] `./result/bin/owl https://example.com` で当該ページが表示される
+  - [ ] 引数なし起動で `about:blank` になる
+  - [ ] `webkit6` の必要シグナルがコンパイルレベルで揃っている(3-3 の結果を記録)
+
+### 3-8. M1 完了条件
+
+- [ ] `just ci`(`fmt-check → lint → coverage → build`)が緑になる
+- [ ] `nix build` が通り、起動してハードコード/引数 URL のページが表示される
+- [ ] design §2 の GTK4 構成が実ビルドで確定した(§16: 「ここで GTK4 構成の最終確定」)。
+      致命的問題があれば §17・§2 のフォールバック判断を design.md に反映する
+
+---
+
+## 完了条件(サイクル 1・2: 純粋ロジック)
 
 - [x] test.md の全 ID(P-01〜P-42、K-01〜K-41)に対応するテストが存在し、すべて green
 - [x] `cargo test` が GTK なしで完結する(テスト対象が gtk/webkit クレートに依存していない)
