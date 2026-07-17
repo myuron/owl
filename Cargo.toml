@@ -4,3 +4,9 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+# design.md §2: gtk4 ^0.11(webkit6 の依存に合わせる)、webkit6 0.6.x。
+# webkit6 0.6.1 は gtk::Accessible(gtk4 の v4_10 以上でゲート)を参照するが、
+# 既定では gtk4 のバージョンフィーチャを有効化しない(§17 の webkit6 成熟度リスク)。
+# nix 供給の GTK 4.22.4(§2)に合わせ、webkit6 が公開する gtk_v4_18 で揃える。
+gtk4 = { version = "0.11", features = ["v4_18"] }
+webkit6 = { version = "0.6", features = ["gtk_v4_18"] }

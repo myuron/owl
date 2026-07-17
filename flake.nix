@@ -63,6 +63,10 @@
           rustToolchain
 	  pkgs.just
 	  pkgs.cargo-llvm-cov
+	  # design.md §2・§15: GTK4 / WebKitGTK 6 のビルドに要るネイティブ依存。
+	  pkgs.pkg-config
+	  pkgs.gtk4
+	  pkgs.webkitgtk_6_0
         ];
       };
       packages.default = pkgs.callPackage ./nix/rust.nix { };
