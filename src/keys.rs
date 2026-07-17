@@ -97,8 +97,13 @@ pub fn resolve_key(
             KeyInput::Esc => (KeyOutcome::act(Action::EnterMode(Mode::Normal)), None),
             KeyInput::Char(_) => (KeyOutcome::proceed(), None),
         },
-        // Command: すべて素通し(Entry が処理)。Hint も本サイクルでは素通し扱い。
-        Mode::Command | Mode::Hint => (KeyOutcome::proceed(), None),
+        // Command: すべて素通し(Entry が処理。Esc/Enter は Entry 側で拾う。§7.2)。
+        Mode::Command => (KeyOutcome::proceed(), None),
+        // Hint: すべて Stop。Esc は Normal へ。ラベル文字の JS 転送は M5 で結線(§7.2・§9)。
+        Mode::Hint => match input {
+            KeyInput::Esc => (KeyOutcome::act(Action::EnterMode(Mode::Normal)), None),
+            KeyInput::Char(_) => (KeyOutcome::stop(), None),
+        },
     }
 }
 
@@ -146,8 +151,8 @@ fn resolve_normal_single(ch: char) -> (KeyOutcome, Option<char>) {
 }
 
 /// モード遷移(設計書 §6)。遷移をまたいでキーシーケンスは持ち越さないため、
-/// pending は必ずクリアされる。返り値は新しい `(mode, pending)`。
-pub fn set_mode(_pending: Option<char>, new_mode: Mode) -> (Mode, Option<char>) {
+/// 新しいモードと、必ずクリアされた `pending`(= `None`)を返す。
+pub fn set_mode(new_mode: Mode) -> (Mode, Option<char>) {
     (new_mode, None)
 }
 
@@ -288,8 +293,50 @@ mod tests {
     #[test]
     fn k41_set_mode_clears_pending() {
         // §6: set_mode はモード遷移をまたいで pending を持ち越さない
-        let (mode, pending) = set_mode(Some('g'), Mode::Normal);
+        let (mode, pending) = set_mode(Mode::Normal);
         assert_eq!(mode, Mode::Normal);
+        assert_eq!(pending, None);
+        // クリア後、Normal 復帰後の `g` は新規シーケンス開始として扱われる
+        let (outcome, pending) = resolve_key(pending, mode, KeyInput::Char('g'));
+        assert_eq!(outcome.action, None);
+        assert_eq!(pending, Some('g'));
+    }
+
+    // --- モード別アームの網羅(K-ID 外だが相異なる分岐を固定する)---
+
+    #[test]
+    fn insert_esc_enters_normal() {
+        let (outcome, pending) = resolve_key(None, Mode::Insert, KeyInput::Esc);
+        assert_eq!(outcome.action, Some(Action::EnterMode(Mode::Normal)));
+        assert_eq!(outcome.propagation, Propagation::Stop);
+        assert_eq!(pending, None);
+    }
+
+    #[test]
+    fn command_mode_proceeds() {
+        // Esc/Enter も含め Entry 側が処理するため素通し(§7.2)
+        for input in [KeyInput::Char('a'), KeyInput::Esc] {
+            let (outcome, pending) = resolve_key(None, Mode::Command, input);
+            assert_eq!(outcome.action, None);
+            assert_eq!(outcome.propagation, Propagation::Proceed);
+            assert_eq!(pending, None);
+        }
+    }
+
+    #[test]
+    fn hint_char_is_stopped() {
+        // Hint はすべて Stop(ラベル文字はページに漏らさない。§7.2)
+        let (outcome, pending) = resolve_key(None, Mode::Hint, KeyInput::Char('a'));
+        assert_eq!(outcome.action, None);
+        assert_eq!(outcome.propagation, Propagation::Stop);
+        assert_eq!(pending, None);
+    }
+
+    #[test]
+    fn hint_esc_enters_normal() {
+        let (outcome, pending) = resolve_key(None, Mode::Hint, KeyInput::Esc);
+        assert_eq!(outcome.action, Some(Action::EnterMode(Mode::Normal)));
+        assert_eq!(outcome.propagation, Propagation::Stop);
         assert_eq!(pending, None);
     }
 }
