@@ -277,6 +277,15 @@ mod tests {
         );
     }
 
+    #[test]
+    fn p25_numeric_leading_host_is_not_scheme() {
+        // 先頭が英字でない(IP 等)→ スキーム判定は false → 規則 4 で https 補完
+        assert_eq!(
+            parse_open_input("8.8.8.8"),
+            Some("https://8.8.8.8".to_string())
+        );
+    }
+
     // --- 規則 5: DuckDuckGo 検索 ---
 
     #[test]

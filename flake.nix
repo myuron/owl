@@ -51,13 +51,18 @@
       bundle = agentLib.mkBundle { inherit pkgs selection; };
       localTargets = {
         claude = agentLib.defaultLocalTargets.claude // { enable = true; };
-      };      
+      };
+      # カバレッジ計測(cargo-llvm-cov)には llvm-tools が要るので拡張を足す。
+      rustToolchain = pkgs.rust-bin.stable.latest.default.override {
+        extensions = [ "llvm-tools-preview" ];
+      };
     in
     {
       devShells.default = pkgs.mkShell {
         packages = [
-          pkgs.rust-bin.stable.latest.default
+          rustToolchain
 	  pkgs.just
+	  pkgs.cargo-llvm-cov
         ];
       };
       packages.default = pkgs.callPackage ./nix/rust.nix { };
