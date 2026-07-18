@@ -303,7 +303,7 @@ WebView のプロパティ通知にバインドする。ポーリングはしな
 
 | 項目 | 内容 | 対処 |
 |---|---|---|
-| `webkit6` crate の成熟度 | 利用実績が少なく、シグナル/API の欠落がありうる | M1 で本書 §8 の全シグナルの存在をコンパイルレベルで確認する |
+| `webkit6` crate の成熟度(**M1 3-3 で確認・解消済み**) | 利用実績が少なく、シグナル/API の欠落がありうる | M1 で §8 の全シグナル/API(`connect_create`・`connect_load_failed`・`load-failed-with-tls-errors`・`connect_web_process_terminated`・`connect_download_started`・`set_tls_errors_policy`・`load_alternate_html`・`set_persistent_storage(Sqlite)`・`Download::cancel`)を webkit6 0.6.1 + `gtk_v4_18` でコンパイルレベル確認。**全て存在**し欠落なし(2026-07-18、`examples/webkit_api_probe.rs` プローブで検証後に削除)。**唯一の差異**: `connect_load_failed` / `connect_load_failed_with_tls_errors` の戻り値は `glib::Propagation` ではなく `bool`(`true` = ハンドル済み)。M7 実装時にこの型で扱う。フォールバック(§2)不要 |
 | `webkit6 0.6.1` の gtk4 フィーチャ未有効化(**M1 3-1 で顕在化・対処済み**) | webkit6 0.6.1 は `gtk::Accessible`(gtk4 の `v4_10` 以上でゲート)を無条件参照するが、既定では gtk4 のバージョンフィーチャを有効化しないため `error[E0425]: cannot find type Accessible in crate gtk` でコンパイル失敗する | GTK 4.22.4(§2)に合わせ、`Cargo.toml` で `gtk4` に `v4_18`、`webkit6` に `gtk_v4_18` フィーチャを付与して整合。`cargo build`/`nix build` の通過を確認済み |
 | メインフレーム非スクロールのページ | §8.1 の JS スクロールが効かない | MVP では許容。頻出なら要素探索方式へ改訂 |
 | iframe 内のヒント・focus 検知 | UserScript は全フレーム注入するが、クロスオリジン iframe とのメッセージングは要検証 | M5 で検証。MVP ではメインフレームのみ動作保証とする |
