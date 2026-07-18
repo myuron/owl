@@ -139,7 +139,13 @@
       return;
     }
 
+    // ラベルは最大 14 + 14*14 = 196 個。これを超える要素はラベル付けできないため切り詰める
+    // (MVP: 超過分はヒント対象外。§9.3)。切り詰めないと labels[j] が undefined になり
+    // toUpperCase() で例外 → オーバーレイ未表示・hint_none も送られず Hint にスタックする。
     var labels = makeLabels(elements.length);
+    if (elements.length > labels.length) {
+      elements = elements.slice(0, labels.length);
+    }
     var container = document.createElement("div");
     container.id = CONTAINER_ID;
 

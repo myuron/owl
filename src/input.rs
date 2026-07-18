@@ -326,6 +326,12 @@ fn leave_command(
 /// 遷移させる(`Link`/`None` → Normal、`Input` → Insert)。JS 側は既に click/focus と
 /// オーバーレイ除去を済ませている(§9)ため、ここでは中心状態とモードインジケータの更新に
 /// 留める(§6・§5-2)。ハンドラ名の登録・page.js 注入は `webview::build`(§4)が担う。
+///
+/// **hint 結果は Hint モード中のみ受理する**(要求 3.3・§9)。`"owl"` ハンドラは main world・
+/// 全フレームに公開されるため、任意のページ(クロスオリジン iframe 含む)が hint 未使用時に
+/// `hint_result` を送って owl を勝手に Insert 等へ遷移させられる。これを防ぐため現モードが
+/// Hint でなければ黙って無視する(CLAUDE.md 規約 1: 安全側へ倒す)。main world 注入自体の
+/// 改ざんリスクは MVP では許容する(§17)。
 fn install_hint_message_handler(
     web_view: &WebView,
     mode_label: &Label,
@@ -351,6 +357,10 @@ fn install_hint_message_handler(
                 // 未知メッセージ(M6 の focus 等・壊れた JSON)は無視する。
                 HintMessage::Ignore => return,
             };
+            // 要求 3.3・§9: hint 結果は Hint モード中のみ有効。ページ起因の偽装遷移を防ぐ。
+            if state.get().mode != Mode::Hint {
+                return;
+            }
             mode_label.set_text(keys::mode_indicator(next));
             web_view.grab_focus();
             state.set(AppState {
