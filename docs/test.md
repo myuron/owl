@@ -124,6 +124,83 @@
 | K-40 | Insert モード | `g` | pending に記録されない(Insert では素通し。§7.2) |
 | K-41 | `Some('g')` の状態でモード遷移 | (`set_mode` 呼び出し) | `set_mode` が pending をクリアする(§6)。Normal 復帰後の `g` は新規シーケンス開始として扱われる |
 
+### 2.6 修飾キー(Normal、§7.2・§7.4)
+
+`KeyInput::{Ctrl(char), SpecialBare, OtherModified}` を Normal モードで解決する。§7.2:
+バインド表にある修飾付きキー(`Ctrl+d`/`Ctrl+u`)のみ Stop、他の修飾付きは Proceed。
+修飾なしの未割り当て特殊キー(矢印等 = `SpecialBare`)は消費して Stop(ページに漏らさない。要求 3.3)。
+修飾系はシーケンスを破棄する(pending を `None` に。§7.3)。
+
+| ID | 事前状態 | 入力 | 期待結果 |
+|---|---|---|---|
+| K-50 | pending なし | `Ctrl+d` | 半ページ下スクロール(`ScrollHalfDown`)、Stop、pending なし |
+| K-51 | pending なし | `Ctrl+u` | 半ページ上スクロール(`ScrollHalfUp`)、Stop、pending なし |
+| K-52 | pending なし | `Ctrl+a`(未割り当ての修飾付き) | アクションなし、**Proceed**(ページへ素通し)、pending なし |
+| K-53 | pending なし | `SpecialBare`(矢印等) | アクションなし、**Stop**(消費)、pending なし |
+| K-54 | pending なし | `OtherModified`(Alt/Super 等) | アクションなし、**Proceed**、pending なし |
+| K-55 | `Some('g')` | `Ctrl+d` | 破棄 → `ScrollHalfDown`、Stop、pending クリア |
+| K-56 | `Some('g')` | `SpecialBare` | 破棄 → Stop、pending クリア |
+| K-57 | `Some('g')` | `OtherModified` | 破棄 → Proceed、pending クリア |
+
+### 2.7 モード別の非文字キー(§7.2)
+
+`Char`/`Esc` 以外の `KeyInput` 変種も各モードで規定どおり伝播する(CLAUDE.md 規約 2: 相異なるアームを全網羅)。
+
+| ID | 事前状態 | 入力 | 期待結果 |
+|---|---|---|---|
+| K-60 | Insert モード | `Ctrl+a` | Proceed(修飾付きも素通し。§7.2) |
+| K-61 | Insert モード | `SpecialBare` | Proceed |
+| K-62 | Insert モード | `OtherModified` | Proceed |
+| K-63 | Hint モード | `Ctrl+a` | Stop(すべて Stop。§7.2) |
+| K-64 | Hint モード | `SpecialBare` | Stop |
+| K-65 | Hint モード | `OtherModified` | Stop |
+| K-66 | Command モード | `Ctrl+a`/`SpecialBare`/`OtherModified` | Proceed(Entry が処理。§7.2) |
+
+### 2.8 `classify_input`(GTK キーイベント → `KeyInput`)
+
+GTK の keyval・修飾状態を純粋な入力種別へ分類する(§7.1・§7.2)。GTK 境界の判定を単体テスト可能な
+純粋関数に閉じる。SHIFT は keyval 側で文字へ畳み込み済みのため分類に使わない。
+
+| ID | escape / ctrl / other_mod / unicode | 期待結果 |
+|---|---|---|
+| C-01 | escape=true(ctrl 併用でも) | `Esc`(Escape を最優先) |
+| C-02 | other_mod=true | `OtherModified`(Alt/Super/Meta) |
+| C-03 | ctrl=true, `Some('d')` | `Ctrl('d')` |
+| C-04 | ctrl=true, `Some('D')`(Shift 併用) | `Ctrl('d')`(小文字化する) |
+| C-05 | ctrl=true, `None` | `OtherModified`(Ctrl+非文字キー) |
+| C-06 | ctrl=true, `Some('4')`(非英字) | `OtherModified` |
+| C-07 | 修飾なし, `Some('j')` | `Char('j')` |
+| C-08 | 修飾なし, `None` | `SpecialBare`(矢印・Fn 等) |
+
+### 2.9 `scroll_script`(Action → 注入 JS)
+
+スクロール系 Action を注入 JS 文字列へ変換する(§7.4 の量・§8.1 の `behavior:'instant'`)。厳密文字列を
+アサートし、丸め/座標/px の誤りを固定する(CLAUDE.md 規約 4)。非スクロール Action は `None`。
+
+| ID | Action | 期待結果(JS 文字列) |
+|---|---|---|
+| S-01 | `ScrollLeft` | `window.scrollBy({left:-50,top:0,behavior:'instant'})` |
+| S-02 | `ScrollRight` | `window.scrollBy({left:50,top:0,behavior:'instant'})` |
+| S-03 | `ScrollUp` | `window.scrollBy({left:0,top:-50,behavior:'instant'})` |
+| S-04 | `ScrollDown` | `window.scrollBy({left:0,top:50,behavior:'instant'})` |
+| S-05 | `ScrollTop` | `window.scrollTo({left:0,top:0,behavior:'instant'})` |
+| S-06 | `ScrollBottom` | `window.scrollTo({left:0,top:document.body.scrollHeight,behavior:'instant'})` |
+| S-07 | `ScrollHalfDown` | `window.scrollBy({left:0,top:window.innerHeight/2,behavior:'instant'})` |
+| S-08 | `ScrollHalfUp` | `window.scrollBy({left:0,top:-window.innerHeight/2,behavior:'instant'})` |
+| S-09 | `Back` / `CopyUrl`(非スクロール) | `None` |
+
+### 2.10 `mode_indicator`(Mode → ステータスバー表示)
+
+モードインジケータの表示文字列(§5-2・§12)。Normal は空、他は `-- MODE --` 相当。空文字列も固定する
+(非空へ変える mutant を落とす。CLAUDE.md 規約 4)。
+
+| ID | Mode | 期待結果 |
+|---|---|---|
+| M-01 | `Normal` | `""`(空) |
+| M-02 | `Insert` | `-- INSERT --` |
+| M-03 | `Command` | `-- COMMAND --` |
+| M-04 | `Hint` | `-- HINT --` |
+
 ## 3. テスト対象外(参考)
 
 以下は §14 によりユニットテストの対象外。手動確認チェックリスト(docs/checklist.md)で扱う:

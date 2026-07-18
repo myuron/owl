@@ -1,11 +1,12 @@
 //! エントリポイント: `gtk::Application` 生成と起動フロー(設計書 §4・§13)。
 //!
 //! GTK 結線コードはユニットテスト対象外(§14)。検証は `nix build` の通過と
-//! 手動確認(`docs/checklist.md` M1)で行う。起動引数 → 初期 URL の決定は
+//! 手動確認(`docs/checklist.md` M1/M3)で行う。起動引数 → 初期 URL の決定は
 //! GTK 非依存の純粋ロジック `command::initial_uri`(§13-3)へ切り出し、単体
-//! テスト済み。純粋ロジックの `keys` は M3 で結線されるまで据え置く。
+//! テスト済み。純粋ロジックの `keys` は M3 で `input`(EventControllerKey 結線)から使う。
 
 mod command;
+mod input;
 mod keys;
 mod webview;
 mod window;

@@ -258,6 +258,61 @@ GTK/WebKit を含むためユニットテスト対象外(design §14)。`window.
 
 ---
 
+## サイクル 5: M3 モードとキーバインド
+
+design.md §16 のマイルストーン **M3**「モードとキーバインド」を実装タスクへ展開する。ゴールは
+「モード管理・Normal のバインド一式(スクロール含む)・ナビゲーション(戻る/進む/リロード/中断)・
+モードインジケータ更新・Insert(手動 `i`/`Esc`)」(§6・§7・§8.1・§12)。
+
+**スコープ境界:** `:`(Command)/`f`(Hint) は M3 では **inert**(pending クリアのみで Normal 維持)—
+Command/Hint モードは M4/M5 で本結線(§7.2: Command は Esc も Proceed するため未結線で遷移すると
+復帰不能)。`:open` 補完(§11)は M4、insert 自動移行(§10)は M6、永続化・エラーページ等(§8)は M7。
+
+**方針:** 純粋ロジック(`keys.rs`)と GTK 結線(`input.rs`)を分離(§4・§14)。純粋部は TDD +
+100% coverage + mutants ゲート、GTK 結線部は手動確認(checklist M3)。
+
+### 5-A. 純粋 `keys.rs` の拡張(TDD、§7.2 の完全実装)
+
+- [x] `docs/test.md §2` に新 ID を追記(§2.6 修飾キー K-50〜K-57、§2.7 モード別非文字キー K-60〜K-66、
+      §2.8 `classify_input` C-01〜C-08、§2.9 `scroll_script` S-01〜S-09、§2.10 `mode_indicator` M-01〜M-04)
+- [x] **Red**: 新 `Action`/`KeyInput` 変種・純粋関数を参照するテストを書き、コンパイルエラーを確認
+- [x] **Green**: `Action` に `ScrollHalfDown`/`ScrollHalfUp`、`KeyInput` に `Ctrl(char)`/`SpecialBare`/
+      `OtherModified` を追加。`resolve_normal` を全変種 match に書換(§7.2: Ctrl+d/u のみ Stop・他 Ctrl は
+      Proceed、SpecialBare は Stop、OtherModified は Proceed、修飾系は pending 破棄)。Insert/Hint アームを
+      `Esc` 以外の全変種へ一般化
+- [x] **Green**: 純粋関数 `scroll_script`(§7.4 の量・§8.1 の `behavior:'instant'` の厳密 JS)、
+      `mode_indicator`(§5-2)、`classify_input`(GTK keyval+修飾 → `KeyInput`、§7.1/§7.2)を実装
+- [x] **Refactor**: `just coverage`(command.rs/keys.rs region/line 100% 維持)・`just mutants`
+      (survivor なし)・`cargo clippy`(-D warnings)/`cargo fmt --check` を通す
+
+### 5-B. GTK 結線(TDD 対象外、design §14。手動確認 = checklist)
+
+- [x] `Justfile` の `coverage` 除外正規表現に `input` を追加(GTK 結線は 100% ゲート対象外)
+- [x] `src/input.rs` を新規作成: `Rc<Cell<AppState{mode,pending_key}>>` を持ち、`EventControllerKey` を
+      ウィンドウに **capture phase**(§7.1)で取り付ける。keyval+修飾 → `keys::classify_input` →
+      `keys::resolve_key` → Action ディスパッチ(スクロール JS `evaluate_javascript`、ナビゲーション
+      `go_back`/`go_forward`/`reload`/`stop_loading`、`CopyUrl` は `clipboard().set_text`、`EnterMode` は
+      `apply_enter_mode`)→ 状態書戻し → `glib::Propagation` を返す
+- [x] `apply_enter_mode`: Insert はインジケータ更新、Normal は `document.activeElement.blur()` 評価 +
+      `grab_focus` + インジケータ空(§6)、Command/Hint は inert(現モード維持)
+- [x] `src/window.rs`: `build_status_bar` を `(Box, Label)` へ変更しモードインジケータのラベルを返す。
+      `build` で `input::install(&window, &web_view, &mode_label)` を呼ぶ
+- [x] `src/main.rs`: `mod input;` を追加
+- [x] `nix develop` 内で `cargo build`/`cargo clippy` が通ることを確認
+
+### 5-手動確認(docs/checklist.md M3)
+
+- [x] `docs/checklist.md` に M3 セクションを追記する
+- [ ] `nix build` した `./result/bin/owl` でモード遷移・スクロール・ナビゲーション・yy コピー・
+      Insert 入力・`:`/`f` の inert を**目視確認**する(checklist M3、ユーザー環境で実施)
+
+### 5-完了条件
+
+- [x] `just ci`(fmt-check → lint → coverage → mutants → build)が緑になる
+- [ ] `nix build` した起動で M3 のキーバインドが期待どおり動く(checklist M3 の目視確認)
+
+---
+
 ## 完了条件(サイクル 1・2: 純粋ロジック)
 
 - [x] test.md の全 ID(P-01〜P-42、K-01〜K-41)に対応するテストが存在し、すべて green

@@ -68,12 +68,20 @@ src/
 ├── main.rs        // エントリポイント: Application 生成、引数処理
 ├── window.rs      // ウィンドウ構築: レイアウト、WebView・ステータスバー・コマンドラインの組み立て
 ├── webview.rs     // WebView 生成と設定: NetworkSession、永続化、各種シグナル(TLS/クラッシュ/ポップアップ/ダウンロード)
-├── mode.rs        // Mode enum とモード遷移(遷移時の副作用: ステータスバー更新、コマンドライン表示切替)
-├── keys.rs        // EventControllerKey のハンドラ: モード別のキー解釈、キーシーケンス処理
-├── command.rs     // command モード: :open のパース、コマンド実行
-├── hints.rs       // hint モード: JS 側との連携、ラベル入力の転送
+├── keys.rs        // 純粋なキー解決状態機械: Mode/Action、resolve_key(モード別解釈・gg/yy シーケンス)、set_mode、classify_input/scroll_script/mode_indicator。GTK 非依存でユニットテスト対象(§14)
+├── input.rs       // キー入力の GTK 結線(M3): EventControllerKey(capture phase)を取り付け、keys で判定した Action を実行(スクロール JS・ナビゲーション API・クリップボード・モード遷移の副作用)
+├── command.rs     // 純粋なコマンド/起動ロジック: :open のパース(§11)、initial_uri/app_subdir/format_load_progress。GTK 非依存でユニットテスト対象
+├── hints.rs       // hint モード: JS 側との連携、ラベル入力の転送(M5)
 └── page.js        // ページへ注入する UserScript(ヒント描画、focus 検知)— include_str! で埋め込む
 ```
+
+> 当初は `mode.rs`(Mode + 遷移)を独立モジュールに、`keys.rs` を EventControllerKey ハンドラに
+> 置く構成だったが、実装では **純粋ロジック(`keys.rs`)と GTK 結線(`input.rs`)を分離**した
+> (§14 のユニットテスト方針・100% coverage ゲートは純粋モジュールのみを対象とするため、GTK 依存の
+> ハンドラは同居できない)。`Mode`/`set_mode` は `keys.rs` に置く(独立 `mode.rs` は作らない)。
+> モード遷移の副作用(インジケータ更新・フォーカス・`document.activeElement.blur()`)は
+> `input::apply_enter_mode` が担う。`command.rs` も同様に純粋ロジックのみを持つ(コマンド実行の
+> 副作用は M4 で呼び出し側に置く)。
 
 ## 5. UI 構造
 
@@ -292,7 +300,7 @@ WebView のプロパティ通知にバインドする。ポーリングはしな
 
 1. **M1 — スケルトン**: 依存追加(Cargo.toml / flake)、ウィンドウ + WebView でハードコード URL が表示される。`nix build` が通る。→ **ここで GTK4 構成の最終確定**(§2)。**引数 URL 起動を M2 から前倒しで実装済み**(生 URL を素通し。補完規則 §11 の適用は M4)
 2. **M2 — ステータスバー**: ステータスバー表示(§5-2・§12)。~~引数 URL 起動~~(M1 へ前倒し済み)。**~~戻る/進む/リロード/中断~~ は M3 へ移動** — 要求 §3.2 のとおりナビゲーションはキーバインド駆動で、そのトリガ(`EventControllerKey`)が M3 の範囲。M2 に他のトリガ手段が無い(ツールバー無し §5、command モードは M4)ため、ナビゲーションを単独で M2 で verify できない
-3. **M3 — モードとキーバインド**: モード管理、Normal のバインド一式(スクロール含む)、**ナビゲーション(戻る/進む/リロード/中断、`Action::{Back,Forward,Reload,StopLoading}` の WebView API 直叩き、M2 から移動)**、モードインジケータの内容更新(`set_mode` → ラベル)、Insert(手動 `i`/`Esc` のみ)
+3. **M3 — モードとキーバインド**: モード管理、Normal のバインド一式(スクロール含む)、**ナビゲーション(戻る/進む/リロード/中断、`Action::{Back,Forward,Reload,StopLoading}` の WebView API 直叩き、M2 から移動)**、モードインジケータの内容更新(`set_mode` → ラベル)、Insert(手動 `i`/`Esc` のみ)。§7.2 の Normal 行を完全実装(`Ctrl+d`/`Ctrl+u` = 半ページ、未割当の修飾なし特殊キーは消費して Stop、他の修飾付きは Proceed)。**`:`(Command)/`f`(Hint) は M3 では inert**(pending をクリアし Normal に留まる)— これらのモードは M4/M5 で本結線するまで機能が無く、特に Command は `resolve_key` が Esc も含め全キーを Proceed する(§7.2)ため、Entry 未結線の段階で遷移させると復帰不能になる。キー結線は純粋ロジック(`keys.rs`)と GTK 結線(`input.rs`)に分離(§4)。モードインジケータ文字列は `-- INSERT --`/`-- COMMAND --`/`-- HINT --`、Normal は空(§5-2)
 4. **M4 — command モード**: コマンドライン UI、`:open` パース + テスト、`:quit`
 5. **M5 — hint モード**: page.js 注入、ヒント表示・選択・モード遷移
 6. **M6 — insert 自動移行**: focus 検知(mousedown 相関)、autofocus 抑止の確認
