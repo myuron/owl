@@ -1,9 +1,15 @@
-//! command モード: `:open` の入力解釈。
+//! command モード: `:open` の入力解釈、および起動時の GTK 非依存な純粋ヘルパー。
 //!
-//! `parse_open_input` は GTK 非依存の純粋関数(設計書 §11)。エラー表示等の
-//! 副作用は呼び出し側が担う。実装は後続マイルストーン(M2 以降)で `main` から
+//! `parse_open_input` は `:open` のパース(設計書 §11)。加えて、起動フローで
+//! GTK 側が必要とする純粋ロジック — 初期 URL 決定(`initial_uri`, §13-3)、
+//! NetworkSession の data/cache ディレクトリ算出(`app_subdir`, §8.2)— を
+//! ここに集約する。いずれも gtk/webkit に依存せず単体テストできる形にし、実際の
+//! `load_uri`・ディレクトリ作成・エラー表示等の副作用は呼び出し側(`window`/
+//! `webview`)が担う(設計書 §4 の純粋ロジック分離)。`parse_open_input` は M4 で
 //! 結線されるまで未使用のため、モジュール全体に dead_code を許可する。
 #![allow(dead_code)]
+
+use std::path::{Path, PathBuf};
 
 const DUCKDUCKGO_SEARCH: &str = "https://duckduckgo.com/?q=";
 const HTTP_SCHEME: &str = "http://";
@@ -11,6 +17,19 @@ const HTTPS_SCHEME: &str = "https://";
 
 /// 起動引数が無いときの初期 URL(設計書 §13-3)。
 const BLANK_URI: &str = "about:blank";
+
+/// XDG ベースディレクトリ配下に置く owl 専用サブディレクトリ名(設計書 §8.2)。
+const APP_SUBDIR: &str = "owl";
+
+/// XDG ベースディレクトリ(`base`)配下の owl 用ディレクトリを返す(設計書 §8.2)。
+///
+/// NetworkSession の data=`$XDG_DATA_HOME/owl`・cache=`$XDG_CACHE_HOME/owl` は
+/// いずれも各 XDG ベース + `owl`。ベースを引数で受け取る純粋関数にし、GTK 依存の
+/// `glib::user_data_dir()` / `user_cache_dir()` 取得と実際のディレクトリ作成
+/// (§13-4 の同期 I/O)は呼び出し側(`webview`)が担う。
+pub fn app_subdir(base: &Path) -> PathBuf {
+    base.join(APP_SUBDIR)
+}
 
 /// 起動引数から初期 URL を決める(設計書 §13-3)。GTK 非依存の純粋関数。
 ///
@@ -120,7 +139,8 @@ fn percent_encode(s: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{initial_uri, parse_open_input};
+    use super::{app_subdir, initial_uri, parse_open_input};
+    use std::path::{Path, PathBuf};
 
     // --- 規則 1: 前処理(trim・空入力)---
 
@@ -381,5 +401,21 @@ mod tests {
     fn s13_no_arg_is_about_blank() {
         // 引数が無ければ about:blank。
         assert_eq!(initial_uri(None), "about:blank");
+    }
+
+    // --- §8.2: NetworkSession の data/cache ディレクトリ算出 ---
+
+    #[test]
+    fn s82_app_subdir_appends_owl_to_xdg_base() {
+        // §8.2: data=$XDG_DATA_HOME/owl・cache=$XDG_CACHE_HOME/owl。いずれも
+        // XDG ベースディレクトリ直下に "owl" を付与する(data/cache とも同じ規則)。
+        assert_eq!(
+            app_subdir(Path::new("/home/u/.local/share")),
+            PathBuf::from("/home/u/.local/share/owl")
+        );
+        assert_eq!(
+            app_subdir(Path::new("/home/u/.cache")),
+            PathBuf::from("/home/u/.cache/owl")
+        );
     }
 }
