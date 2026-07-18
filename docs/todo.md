@@ -366,6 +366,72 @@ insert 自動移行(§10)は M6、エラーページ等(§8)は M7。
 
 ---
 
+## サイクル 7: M5 hint モード
+
+design.md §16 のマイルストーン **M5**「hint モード」を実装タスクへ展開する。ゴールは
+「`f` でクリック可能要素にラベルを重畳表示 → ラベルをタイプして選択 → リンクは遷移して
+Normal へ、テキスト入力欄は focus して Insert へ、`Esc` でキャンセル」(要求 §3.3・§9)。
+
+**スコープ境界:** M3/M4 で inert だった `f`(Hint 遷移)を本結線する。owl で初めて
+**JS → Rust 通信**(script message handler `"owl"`、§9.2)と **page.js の UserScript 常駐注入**
+(§9・§10)を導入する。§10 の focus 監視(insert 自動移行)は **M6** で page.js に追加する。
+クロスオリジン iframe 内のヒントは MVP 非保証(§17、メインフレームのみ動作保証)。
+
+**方針:** 純粋ロジック(`hints.rs` の JS 文字列組み立て・メッセージ解釈、`keys.rs` の
+`Action::HintInput`)と GTK/JS 結線(`webview`・`input`・`page.js`)を分離(§4・§14)。
+純粋部は TDD + 100% coverage + mutants ゲート、GTK/JS 結線部は手動確認(checklist M5)。
+
+### 7-0. webkit6 API 存在確認(§16・§17、M1 の precedent)
+
+- [x] M5 で新規に使う API(`UserContentManager`・`UserScript::new`・`register_script_message_handler`・
+      `connect_script_message_received(_, &javascriptcore::Value)`・`Value::to_str`・
+      `WebView::builder().user_content_manager`)を一時プローブ(`examples/`)で `cargo build --example`
+      解決確認 → 全て存在(webkit6 0.6.1)。確認後プローブ削除、結果を design.md §17 へ記録
+
+### 7-A. 純粋ロジックの実装(TDD、§9)
+
+- [x] `docs/test.md` に hint 純粋ロジックの新 ID(`H-01`〜`H-16`)と `K-67`(Hint `Char`→`HintInput`)を追記
+- [x] **Red**: 未実装の `Action::HintInput`・`hints::{start_script,input_script,cancel_script,parse_hint_message}`
+      を参照するテストを書き、コンパイルエラーを確認。相異なる分岐(`HintMessage` の `Link`/`Input`/
+      `None`/`Ignore`)・エスケープ・エラー入力を厳密に固定(CLAUDE.md 規約 2・4:
+      `'`/`\`/制御文字/U+2028 で落ちる値、コロン欠落等の壊れた JSON)
+- [x] **Green**: `keys.rs` に `Action::HintInput(char)` を追加し `resolve_key` の Hint アームを拡張
+      (`Char`→`HintInput`/Stop、`Esc`→`EnterMode(Normal)`、非文字→Stop)。新規 `hints.rs` に
+      `start_script`/`cancel_script`/`input_script`(JS シングルクォート文字列エスケープ)/
+      `parse_hint_message`(§9.2 の JSON を std のみで解釈)を実装。`main.rs` に `mod hints;`
+- [x] **Refactor**: `just coverage`(command/keys/hints region・line 100%)・`just mutants`
+      (`-f src/hints.rs` 追加、survivor なし)・`cargo clippy`(-D warnings)/`cargo fmt --check` を通す
+
+### 7-B. GTK/JS 結線(TDD 対象外、design §14。手動確認 = checklist)
+
+- [x] `src/page.js`(新規、`include_str!` で埋め込む): `window.owlHints = {start, input, cancel}`。
+      §9.3 のセレクタで要素列挙 → 可視/ビューポート判定 → ホームロー `sadfjklewcmpgh` で 1〜2 文字
+      ラベル採番 → `<div class="owl-hint">`(§9.4)描画。`input(ch)` で前方一致絞り込み・全長一致で確定
+      (editable は `.focus()`+`hint_result:input`、他は `.click()`+`hint_result:link`)・全滅で `hint_none`。
+      `postMessage(JSON.stringify(...))` で "owl" ハンドラへ通知。§10 focus 監視は M6
+- [x] `src/webview.rs`: `UserContentManager` を生成し page.js を `UserScript`(document-start・全フレーム)で
+      `add_script`、`register_script_message_handler("owl", None)`、`WebView::builder().user_content_manager`
+      で紐付け。ハンドラ名は `HINT_MESSAGE_HANDLER` 定数で公開
+- [x] `src/input.rs`: `apply_enter_mode` の Hint を本結線(`-- HINT --` 表示 + `owlHints.start()`)、
+      `dispatch` に `Action::HintInput`(=`owlHints.input(ch)` 転送)、Hint→Normal(Esc)で `owlHints.cancel()`、
+      新規 `install_hint_message_handler`(`connect_script_message_received` → `parse_hint_message` →
+      `Link`/`None`→Normal・`Input`→Insert・`Ignore`→無視、中心状態とインジケータ更新)
+- [x] `nix develop` 内で `cargo build`/`cargo clippy` が通ることを確認
+
+### 7-手動確認(docs/checklist.md M5)
+
+- [x] `docs/checklist.md` に M5 セクションを追記する
+- [ ] `nix build` した `./result/bin/owl` で `f`→ラベル表示・リンク選択(→Normal 遷移)・入力欄選択
+      (→Insert 遷移)・`Esc` キャンセル・iframe(メインフレームのみ)・about:blank を**目視確認**する
+      (checklist M5、ユーザー環境で実施)
+
+### 7-完了条件
+
+- [x] `just ci`(fmt-check → lint → coverage → mutants → build)が緑になる
+- [ ] `nix build` した起動で M5 の hint モードが期待どおり動く(checklist M5 の目視確認)
+
+---
+
 ## 完了条件(サイクル 1・2: 純粋ロジック)
 
 - [x] test.md の全 ID(P-01〜P-42、K-01〜K-41)に対応するテストが存在し、すべて green

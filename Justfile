@@ -26,7 +26,7 @@ coverage:
 # 変えても 100% のままだが、cargo-mutants はその mutant が生き残る(= テスト不足)ことを
 # 検出する。GTK 依存の結線ファイルは対象外(純粋ロジックのみを対象にする)。
 mutants:
-  cargo mutants --no-shuffle -f src/command.rs -f src/keys.rs
+  cargo mutants --no-shuffle -f src/command.rs -f src/keys.rs -f src/hints.rs
 
 build:
   nix build

@@ -177,6 +177,7 @@ URL に解決する。エラーメッセージは呼び出し側(ステータス
 | K-64 | Hint モード | `SpecialBare` | Stop |
 | K-65 | Hint モード | `OtherModified` | Stop |
 | K-66 | Command モード | `Ctrl+a`/`SpecialBare`/`OtherModified` | Proceed(Entry が処理。§7.2) |
+| K-67 | Hint モード | `Char(c)`(ラベル文字) | `HintInput(c)` を返し **Stop**(ページに漏らさず JS へ転送。§9.1・§9.2)、pending なし |
 
 ### 2.8 `classify_input`(GTK キーイベント → `KeyInput`)
 
@@ -223,11 +224,34 @@ GTK の keyval・修飾状態を純粋な入力種別へ分類する(§7.1・§7
 | M-03 | `Command` | `-- COMMAND --` |
 | M-04 | `Hint` | `-- HINT --` |
 
+### 2.11 hint モードの純粋ロジック(§9)
+
+Rust ⇔ page.js の通信文字列の組み立て/解釈(`hints.rs`)。ラベル採番・要素列挙・描画は
+page.js(JS 側)が担い**ユニットテスト対象外**(§3)。Rust 側の JS 文字列生成とメッセージ解釈のみ
+純粋関数として固定する。厳密文字列・全アームをアサートし、誤実装で落ちる値を選ぶ(CLAUDE.md 規約 2・4)。
+
+| ID | 対象 | 入力 | 期待結果 |
+|---|---|---|---|
+| H-01 | `start_script`/`cancel_script` | — | `owlHints.start()` / `owlHints.cancel()`(厳密一致) |
+| H-02 | `input_script` | `'a'` / `'s'` | `owlHints.input('a')` / `owlHints.input('s')` |
+| H-03 | `input_script` | `'\''` / `'\\'` | `\'` / `\\` へエスケープ(JS 構文を壊さない。§7.2) |
+| H-04 | `input_script` | `\n`/`\r`/`\t`/U+2028/U+2029/`\u{1}`/`\u{1f}` | 各制御文字を `\n`…や 4 桁ゼロ詰め `\uXXXX` へ |
+| H-05 | `input_script` | `' '`(U+0020) | エスケープせずそのまま(境界 `< 0x20` を固定) |
+| H-10 | `parse_hint_message` | `{"type":"hint_result","target":"link"}` | `Link` |
+| H-11 | `parse_hint_message` | `{"type":"hint_result","target":"input"}` | `Input` |
+| H-12 | `parse_hint_message` | `{"type":"hint_none"}` | `None` |
+| H-13 | `parse_hint_message` | `{"type":"focus",…}`(未知 type) | `Ignore`(M6 の focus 等を前方互換で無視) |
+| H-14 | `parse_hint_message` | `hint_result` + 未知/欠落 target | `Ignore` |
+| H-15 | `parse_hint_message` | `{}`/非 JSON/空/コロン欠落/非文字列値/閉じ引用符欠落 | `Ignore`(全短絡パス) |
+| H-16 | `parse_hint_message` | `{ "type" : "hint_none" }` | `None`(`:` 前後の空白を許容) |
+
 ## 3. テスト対象外(参考)
 
 以下は §14 によりユニットテストの対象外。手動確認チェックリスト(docs/checklist.md)で扱う:
 
 - モード遷移の副作用(ステータスバー更新、コマンドライン表示、フォーカス移動)
-- hint モード全般(page.js との連携)
+- hint モードの **page.js 連携**(要素列挙・ラベル採番・描画・絞り込み・click/focus 確定)と GTK 結線
+  (`owlHints.*` 駆動・script message handler 受信・モード遷移)。Rust 側の純粋ロジック
+  (`hints.rs` の JS 文字列生成・メッセージ解釈)は §2.11(H-01〜H-16)で単体テストする
 - insert 自動移行(mousedown 相関、autofocus 抑止)
 - WebView 統合(TLS Fail、エラーページ、クラッシュ復帰、ポップアップ抑制、ダウンロードキャンセル)

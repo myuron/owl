@@ -5,12 +5,25 @@
 //! `enable_developer_extras`(§8.7)・初期 URI の `load_uri`。Cookie 永続化
 //! (`set_persistent_storage`)と §8.3〜8.6 のシグナル結線は M7。data/cache の
 //! パス算出は GTK 非依存の純粋関数 `command::app_subdir`(§8.2)に委譲する。
+//!
+//! M5(§9・§10): `UserContentManager` に page.js を document-start・全フレームで注入し、
+//! JS → Rust の script message handler `"owl"` を登録する。受信 callback の結線と JS 呼び出し
+//! (`owlHints.*`)の駆動は `input`(§4 の副作用側)が担う。
 
 use gtk4::glib;
 use webkit6::prelude::*;
-use webkit6::{NetworkSession, Settings, WebView};
+use webkit6::{
+    NetworkSession, Settings, UserContentInjectedFrames, UserContentManager, UserScript,
+    UserScriptInjectionTime, WebView,
+};
 
 use crate::command;
+
+/// ページへ常駐注入する JS(設計書 §9・§10)。ビルド時に埋め込む。
+const PAGE_JS: &str = include_str!("page.js");
+
+/// JS → Rust の script message handler 名(設計書 §9.2)。
+pub const HINT_MESSAGE_HANDLER: &str = "owl";
 
 /// 初期 URI を読み込んだ `WebView` を生成して返す(設計書 §5-1・§8)。
 ///
@@ -39,9 +52,23 @@ pub fn build(uri: &str) -> WebView {
     let settings = Settings::new();
     settings.set_enable_developer_extras(true);
 
+    // §9・§10: page.js を document-start・全フレームで常駐注入し、JS → Rust の
+    // メッセージハンドラ "owl" を登録する。Rust 側の受信結線(callback)は input が担う(§4)。
+    let content_manager = UserContentManager::new();
+    let user_script = UserScript::new(
+        PAGE_JS,
+        UserContentInjectedFrames::AllFrames,
+        UserScriptInjectionTime::Start,
+        &[],
+        &[],
+    );
+    content_manager.add_script(&user_script);
+    content_manager.register_script_message_handler(HINT_MESSAGE_HANDLER, None);
+
     // §8.2: NetworkSession を紐付けて WebView を生成する。
     let web_view = WebView::builder()
         .network_session(&network_session)
+        .user_content_manager(&content_manager)
         .settings(&settings)
         .build();
 
