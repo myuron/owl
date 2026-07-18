@@ -313,6 +313,59 @@ Command/Hint モードは M4/M5 で本結線(§7.2: Command は Esc も Proceed 
 
 ---
 
+## サイクル 6: M4 command モード
+
+design.md §16 のマイルストーン **M4**「command モード」を実装タスクへ展開する。ゴールは
+「`:` でコマンドライン(Entry)を開き、`:open <input>` で補完済み URL を開ける・`:quit` で
+終了できる・未知コマンドはステータスバーにエラー表示」(§11・§5-3)。
+
+**スコープ境界:** `:open` の補完規則(`parse_open_input`)は M1 で実装・テスト済み。M4 は
+その**コマンドディスパッチ**(`parse_command`)と**コマンドライン UI の GTK 結線**を担う。
+M3 で inert だった `:`(Command 遷移)を本結線する。`f`(Hint)は M5 まで inert のまま据え置く。
+insert 自動移行(§10)は M6、エラーページ等(§8)は M7。
+
+**方針:** 純粋ロジック(`command::parse_command`)と GTK 結線(`input`)を分離(§4・§14)。
+純粋部は TDD + 100% coverage + mutants ゲート、GTK 結線部は手動確認(checklist M4)。
+
+### 6-A. 純粋 `parse_command` の実装(TDD、§11)
+
+- [x] `docs/test.md §1.7` に新 ID CMD-01〜CMD-11 を追記(コマンドディスパッチ)
+- [x] **Red**: 未実装の `Command` enum・`parse_command` を参照する `cmd01_*`〜`cmd11_*` テストを書き、
+      コンパイルエラーを確認。相異なる分岐(`Open`/`Quit`/`Noop`/`Error`)とエラー文字列を厳密に固定
+      (CLAUDE.md 規約 2・4)
+- [x] **Green**: `command.rs` に `Command`(`Open`/`Quit`/`Noop`/`Error`)と `parse_command` を実装
+      (先頭 `:` を 1 個剥がし trim → 最初の空白で分割 → `open`/`quit`/未知。`:open` 引数は
+      `parse_open_input` で補完)。`parse_open_input` の結線で dead_code 解消 → モジュールの
+      `#![allow(dead_code)]` を撤去し doc を実態へ更新
+- [x] **Refactor**: `just coverage`(command.rs/keys.rs region/line 100% 維持)・`just mutants`
+      (survivor なし)・`cargo clippy`(-D warnings)/`cargo fmt --check` を通す
+
+### 6-B. GTK 結線(TDD 対象外、design §14。手動確認 = checklist)
+
+- [x] `src/window.rs`: コマンドライン Entry(`build_command_line`、初期非表示 §5-3)を縦 Box の
+      ステータスバー直下に append。ステータスバーにメッセージ欄(エラー表示 §11、`.owl-message`
+      警告色)を追加し `build_status_bar` を `(Box, Label, Label)` へ変更(mode・message を返す)
+- [x] `src/input.rs`: `install` に `command_entry`/`message_label` を追加し、中心状態 `Rc<Cell<AppState>>`
+      を window key コントローラと Entry の activate/Esc の 3 ハンドラで共有。Command 遷移で Entry を
+      `:` 初期値・非選択フォーカス(`grab_focus_without_selecting` + `set_position(-1)`)・メッセージ
+      クリアで開く。`activate` で `parse_command` を実行(`Open`→`load_uri`・`Quit`→`window.close()`・
+      `Noop`→無視・`Error`→メッセージ表示)、Entry 上の Esc コントローラでキャンセル。いずれも
+      `leave_command`(Entry 非表示・フォーカス復帰・Normal 復帰)で締める
+- [x] `nix develop` 内で `cargo build`/`cargo clippy` が通ることを確認
+
+### 6-手動確認(docs/checklist.md M4)
+
+- [x] `docs/checklist.md` に M4 セクションを追記する
+- [ ] `nix build` した `./result/bin/owl` で `:` 起動・`:open`(補完各種)・`:quit`・未知コマンドの
+      エラー表示・Esc キャンセルを**目視確認**する(checklist M4、ユーザー環境で実施)
+
+### 6-完了条件
+
+- [x] `just ci`(fmt-check → lint → coverage → mutants → build)が緑になる
+- [ ] `nix build` した起動で M4 の command モードが期待どおり動く(checklist M4 の目視確認)
+
+---
+
 ## 完了条件(サイクル 1・2: 純粋ロジック)
 
 - [x] test.md の全 ID(P-01〜P-42、K-01〜K-41)に対応するテストが存在し、すべて green

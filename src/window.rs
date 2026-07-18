@@ -1,18 +1,19 @@
 //! ウィンドウ構築(設計書 §5)。
 //!
 //! `gtk::ApplicationWindow` 直下に縦 `gtk::Box` を置き、WebView(§5-1)を `vexpand`
-//! で表示領域に広げ、その下にステータスバー(§5-2・§12)を 1 行で配置する。
-//! ステータスバーは WebView のプロパティ通知(`notify::uri`/`title`/`is-loading`/
-//! `estimated-load-progress`)にバインドし、ポーリングはしない(§12)。表示文字列の
-//! 組み立てのうち純粋ロジック(読み込み状態 → `[NN%]`)は `command::format_load_progress`
-//! に委譲する(§4 の純粋ロジック分離)。コマンドライン(§5-3)は M4。WebView の生成・
-//! 設定(NetworkSession・`load_uri` 等 §8)は webview.rs に委譲する(§4)。
+//! で表示領域に広げ、その下にステータスバー(§5-2・§12)を 1 行、さらに下にコマンドライン
+//! (§5-3、通常は非表示)を配置する。ステータスバーは WebView のプロパティ通知
+//! (`notify::uri`/`title`/`is-loading`/`estimated-load-progress`)にバインドし、
+//! ポーリングはしない(§12)。表示文字列の組み立てのうち純粋ロジック(読み込み状態 →
+//! `[NN%]`)は `command::format_load_progress` に委譲する(§4 の純粋ロジック分離)。
+//! コマンドライン Entry の結線(表示・実行・キャンセル、§11)は `input`(M4)が担う。
+//! WebView の生成・設定(NetworkSession・`load_uri` 等 §8)は webview.rs に委譲する(§4)。
 
 use std::sync::Once;
 
 use gtk4::pango::EllipsizeMode;
 use gtk4::prelude::*;
-use gtk4::{Align, Application, ApplicationWindow, CssProvider, Label, Orientation};
+use gtk4::{Align, Application, ApplicationWindow, CssProvider, Entry, Label, Orientation};
 use webkit6::WebView;
 use webkit6::prelude::*;
 
@@ -20,19 +21,23 @@ use crate::command;
 use crate::input;
 use crate::webview;
 
-/// ステータスバーの最小 CSS(設計書 §5: 配色・等幅フォントのみをハードコード)。
-const STATUS_BAR_CSS: &str = ".owl-statusbar {
+/// ステータスバー・コマンドラインの最小 CSS(設計書 §5: 配色・等幅フォントのみをハードコード)。
+/// `.owl-message` はコマンドのエラー表示(§11)で、通常テキストと区別できる警告色にする。
+const STATUS_BAR_CSS: &str = ".owl-statusbar, .owl-commandline {
     font-family: monospace;
     padding: 2px 6px;
     background-color: #1e1e1e;
     color: #d4d4d4;
+}
+.owl-message {
+    color: #e5a03c;
 }";
 
 /// `activate` から呼ばれ、ウィンドウを構築して present する(設計書 §13-2)。
 ///
 /// §5: `ApplicationWindow` 直下に縦 `gtk::Box` を置き、WebView を `vexpand = true` で
-/// 広げ(§5-1)、直下にステータスバー(§5-2)を append する。ツールバー・メニューバーは
-/// 持たない(要求 5 章)。コマンドライン(§5-3)は M4。初期 URI(`uri`)の読み込みは
+/// 広げ(§5-1)、直下にステータスバー(§5-2)、さらに下にコマンドライン(§5-3、通常非表示)を
+/// append する。ツールバー・メニューバーは持たない(要求 5 章)。初期 URI(`uri`)の読み込みは
 /// webview.rs の `load_uri`(§8)が担う。
 pub fn build(app: &Application, uri: &str) {
     // §4: WebView の生成・設定は webview.rs に委譲する。
@@ -40,14 +45,19 @@ pub fn build(app: &Application, uri: &str) {
     // §5-1: WebView を縦方向に伸ばし、表示領域を占める。
     web_view.set_vexpand(true);
 
-    // §5-2・§12: ステータスバーを組み立て、WebView の notify に結線する。モードインジケータの
-    // ラベルは M3 のキー結線(input)から更新するため受け取る。
-    let (status_bar, mode_label) = build_status_bar(&web_view);
+    // §5-2・§12: ステータスバーを組み立て、WebView の notify に結線する。モードインジケータと
+    // メッセージ(エラー)のラベルは M4 のキー結線(input)から更新するため受け取る。
+    let (status_bar, mode_label, message_label) = build_status_bar(&web_view);
 
-    // §5: ApplicationWindow 直下の縦 Box。上に WebView、下にステータスバー 1 行。
+    // §5-3: コマンドライン。command モードでのみ表示する(初期は非表示)。表示・実行・
+    // キャンセルの結線は input(§11)が担う。
+    let command_entry = build_command_line();
+
+    // §5: ApplicationWindow 直下の縦 Box。上に WebView、下にステータスバー、コマンドライン。
     let layout = gtk4::Box::new(Orientation::Vertical, 0);
     layout.append(&web_view);
     layout.append(&status_bar);
+    layout.append(&command_entry);
 
     let window = ApplicationWindow::builder()
         .application(app)
@@ -56,29 +66,57 @@ pub fn build(app: &Application, uri: &str) {
         .child(&layout)
         .build();
 
-    // §7.1: EventControllerKey をウィンドウに capture phase で取り付ける(M3)。モード遷移時の
-    // インジケータ更新のため mode_label を渡す。
-    input::install(&window, &web_view, &mode_label);
+    // §7.1・§11: EventControllerKey をウィンドウに capture phase で取り付け、コマンドライン
+    // Entry の実行/キャンセルも結線する(M4)。モード遷移・エラー表示のため各ラベル/Entry を渡す。
+    input::install(
+        &window,
+        &web_view,
+        &mode_label,
+        &command_entry,
+        &message_label,
+    );
 
     window.present();
 }
 
-/// ステータスバー(高さ 1 行の横 `gtk::Box`)を組み立て、バーとモードインジケータの
-/// ラベルを返す(設計書 §5-2・§12)。
+/// コマンドライン Entry を組み立てる(設計書 §5-3)。command モードでのみ表示するため
+/// 初期は非表示。表示・初期値 `:`・フォーカス・実行(Enter)・キャンセル(Esc)の結線は
+/// `input`(§11)が担う。
+fn build_command_line() -> Entry {
+    let entry = Entry::new();
+    entry.add_css_class("owl-commandline");
+    entry.set_visible(false);
+    entry
+}
+
+/// ステータスバー(高さ 1 行の横 `gtk::Box`)を組み立て、バー・モードインジケータ・
+/// メッセージ(エラー)のラベルを返す(設計書 §5-2・§12)。
 ///
-/// 左から: モードインジケータ・URL・タイトル、右端に読み込み状態(§5-2)。URL/タイトル/
-/// 読み込み状態は WebView の notify シグナルで更新する(§12: プロパティ通知にバインド、
-/// ポーリングしない)。モードインジケータは WebView のプロパティではなくモード遷移で変わるため
-/// (§12: `set_mode` から更新)、そのラベルを呼び出し側(M3 の `input`)へ返して結線させる。
-fn build_status_bar(web_view: &WebView) -> (gtk4::Box, Label) {
+/// 左から: モードインジケータ・メッセージ・URL・タイトル、右端に読み込み状態(§5-2)。URL/
+/// タイトル/読み込み状態は WebView の notify シグナルで更新する(§12: プロパティ通知に
+/// バインド、ポーリングしない)。モードインジケータとメッセージは WebView のプロパティでは
+/// なくキー入力(モード遷移・コマンド実行)で変わるため、そのラベルを呼び出し側(M4 の
+/// `input`)へ返して結線させる。メッセージ欄はコマンドのエラー表示(§11)に使う(将来
+/// §8.5 の「download blocked」表示もここへ集約する余地を残す)。
+fn build_status_bar(web_view: &WebView) -> (gtk4::Box, Label, Label) {
     install_css();
 
     let bar = gtk4::Box::new(Orientation::Horizontal, 8);
     bar.add_css_class("owl-statusbar");
 
     // モードインジケータ(§5-2: `-- INSERT --` 相当、normal 時は空)。初期は Normal で空。
-    // 内容更新は M3 のキー結線(`input::install` → `keys::mode_indicator`)が担う(§12)。
+    // 内容更新は M3/M4 のキー結線(`input::install` → `keys::mode_indicator`)が担う(§12)。
     let mode = Label::new(None);
+
+    // メッセージ(§11: 未知コマンド/`:open` 空引数のエラー)。初期は空。内容更新は M4 の
+    // キー結線(`input` の command 実行)が担う。警告色は `.owl-message` で付ける。
+    let message = Label::new(None);
+    message.add_css_class("owl-message");
+    message.set_halign(Align::Start);
+    // 長大な未知コマンド名でもラベルの自然幅がウィンドウ最小幅を押し広げないよう省略する
+    // (URL/タイトルと同じ扱い)。
+    message.set_ellipsize(EllipsizeMode::End);
+    message.set_max_width_chars(40);
 
     // URL(§12: notify::uri)。余白を占め、長い URL は末尾省略する。
     let url = Label::new(web_view.uri().as_deref());
@@ -99,6 +137,7 @@ fn build_status_bar(web_view: &WebView) -> (gtk4::Box, Label) {
     update_progress(&progress, web_view);
 
     bar.append(&mode);
+    bar.append(&message);
     bar.append(&url);
     bar.append(&title);
     bar.append(&progress);
@@ -123,7 +162,7 @@ fn build_status_bar(web_view: &WebView) -> (gtk4::Box, Label) {
     let progress_label = progress.clone();
     web_view.connect_is_loading_notify(move |wv| update_progress(&progress_label, wv));
 
-    (bar, mode)
+    (bar, mode, message)
 }
 
 /// 読み込み状態ラベルを現在の WebView プロパティで更新する(設計書 §12)。
