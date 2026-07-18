@@ -134,6 +134,8 @@ enum Mode {
 | Command | すべて Proceed(Entry が処理)。`Esc`/`Enter` は Entry 側のシグナルで拾う | 同左 |
 | Hint | すべて Stop。ラベル文字は JS へ転送(§9)、`Esc` は Normal へ、他は無視 | Stop(無視) |
 
+`Esc` は修飾より優先する: `Ctrl+Esc`/`Alt+Esc` 等も修飾なしの `Esc` と同じく扱う(修飾付きの Proceed より、中断/モード復帰という `Esc` 本来の役割を優先する)。分類は純粋関数 `keys::classify_input` が担い、`escape` フラグを最初に判定する(テスト C-01 で固定)。
+
 ### 7.3 キーシーケンス(`gg` / `yy`)
 
 `AppState.pending_key` で処理する。Normal モードで `g`・`y` を受けたら `pending_key` に記録して Stop。次のキーで:

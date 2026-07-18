@@ -224,6 +224,16 @@ pub fn mode_indicator(mode: Mode) -> &'static str {
 /// 束ねない修飾(Alt/Super/Meta = `other_mod`)、次に Ctrl(英字のみ `Ctrl`、他は `OtherModified`)、
 /// 最後に修飾なし(文字は `Char`、非文字は `SpecialBare`)の順で判定する。SHIFT は keyval 側で
 /// 文字へ畳み込み済みのため分類には用いない(`Ctrl+Shift+D` は `Ctrl('d')` に正規化する)。
+///
+/// 留意点(いずれも現状の Normal バインドでは無害):
+/// - `escape` を修飾より優先するため `Ctrl+Esc`/`Alt+Esc` も `Esc` として扱う(§7.2 の
+///   「修飾付きは Proceed」より Esc の中断を優先。design §7.2 に明記、テスト C-01 で固定)。
+/// - 修飾キー単独押下(Shift/Ctrl のみ等)は `unicode=None`・修飾なしのため `SpecialBare` と
+///   なり Normal では Stop → **pending を破棄する**。`gg`/`yy` は Shift 不要なので問題ないが、
+///   将来 Shift を含む 2 打鍵シーケンスを足す場合はこの破棄に注意する。
+/// - GDK は Enter/Tab/BackSpace 等を制御文字(`'\r'`/`'\t'`/`'\u{8}'` 等)へ写すため `Char` に
+///   なる(`SpecialBare` ではない)。Normal では未割り当て文字として Stop、Insert では Proceed
+///   となり挙動は正しいが、`Char` が印字可能とは限らない点に注意する。
 pub fn classify_input(
     escape: bool,
     ctrl: bool,

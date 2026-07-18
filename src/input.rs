@@ -59,7 +59,8 @@ pub fn install(window: &ApplicationWindow, web_view: &WebView, mode_label: &Labe
         let other_mod = mods.intersects(
             gdk::ModifierType::ALT_MASK
                 | gdk::ModifierType::SUPER_MASK
-                | gdk::ModifierType::META_MASK,
+                | gdk::ModifierType::META_MASK
+                | gdk::ModifierType::HYPER_MASK,
         );
         let input = keys::classify_input(escape, ctrl, other_mod, keyval.to_unicode());
 
@@ -83,20 +84,13 @@ pub fn install(window: &ApplicationWindow, web_view: &WebView, mode_label: &Labe
 
 /// 解決されたアクションを実行し、遷移後のモードを返す(設計書 §7.4・§8.1・§6)。
 fn dispatch(action: Action, web_view: &WebView, mode_label: &Label, current: Mode) -> Mode {
+    // スクロールは注入 JS(§8.1)。対象 Action と JS 文字列の唯一の定義元は純粋関数
+    // `scroll_script`(§7.4)。ここで先に引き当て、スクロール系はこの分岐で完結させる。
+    if let Some(js) = keys::scroll_script(action) {
+        eval_js(web_view, js);
+        return current;
+    }
     match action {
-        // スクロールは注入 JS(§8.1)。文字列生成は純粋関数 `scroll_script`(§7.4)へ委譲。
-        Action::ScrollLeft
-        | Action::ScrollRight
-        | Action::ScrollUp
-        | Action::ScrollDown
-        | Action::ScrollTop
-        | Action::ScrollBottom
-        | Action::ScrollHalfDown
-        | Action::ScrollHalfUp => {
-            if let Some(js) = keys::scroll_script(action) {
-                eval_js(web_view, js);
-            }
-        }
         // ナビゲーションは WebView API 直叩き(§7.4)。
         Action::Back => web_view.go_back(),
         Action::Forward => web_view.go_forward(),
@@ -111,6 +105,15 @@ fn dispatch(action: Action, web_view: &WebView, mode_label: &Label, current: Mod
         Action::EnterMode(target) => {
             return apply_enter_mode(target, web_view, mode_label, current);
         }
+        // スクロール系は上の `scroll_script` で処理済み(到達しない)。網羅性のため明示する。
+        Action::ScrollLeft
+        | Action::ScrollRight
+        | Action::ScrollUp
+        | Action::ScrollDown
+        | Action::ScrollTop
+        | Action::ScrollBottom
+        | Action::ScrollHalfDown
+        | Action::ScrollHalfUp => {}
     }
     current
 }
