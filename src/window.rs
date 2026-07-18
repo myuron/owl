@@ -17,6 +17,7 @@ use webkit6::WebView;
 use webkit6::prelude::*;
 
 use crate::command;
+use crate::input;
 use crate::webview;
 
 /// ステータスバーの最小 CSS(設計書 §5: 配色・等幅フォントのみをハードコード)。
@@ -39,8 +40,9 @@ pub fn build(app: &Application, uri: &str) {
     // §5-1: WebView を縦方向に伸ばし、表示領域を占める。
     web_view.set_vexpand(true);
 
-    // §5-2・§12: ステータスバーを組み立て、WebView の notify に結線する。
-    let status_bar = build_status_bar(&web_view);
+    // §5-2・§12: ステータスバーを組み立て、WebView の notify に結線する。モードインジケータの
+    // ラベルは M3 のキー結線(input)から更新するため受け取る。
+    let (status_bar, mode_label) = build_status_bar(&web_view);
 
     // §5: ApplicationWindow 直下の縦 Box。上に WebView、下にステータスバー 1 行。
     let layout = gtk4::Box::new(Orientation::Vertical, 0);
@@ -54,22 +56,28 @@ pub fn build(app: &Application, uri: &str) {
         .child(&layout)
         .build();
 
+    // §7.1: EventControllerKey をウィンドウに capture phase で取り付ける(M3)。モード遷移時の
+    // インジケータ更新のため mode_label を渡す。
+    input::install(&window, &web_view, &mode_label);
+
     window.present();
 }
 
-/// ステータスバー(高さ 1 行の横 `gtk::Box`)を組み立てて返す(設計書 §5-2・§12)。
+/// ステータスバー(高さ 1 行の横 `gtk::Box`)を組み立て、バーとモードインジケータの
+/// ラベルを返す(設計書 §5-2・§12)。
 ///
-/// 左から: モードインジケータ・URL・タイトル、右端に読み込み状態(§5-2)。各ラベルの
-/// 初期値は WebView の現在のプロパティから設定し、以後は notify シグナルで更新する
-/// (§12: プロパティ通知にバインド、ポーリングしない)。
-fn build_status_bar(web_view: &WebView) -> gtk4::Box {
+/// 左から: モードインジケータ・URL・タイトル、右端に読み込み状態(§5-2)。URL/タイトル/
+/// 読み込み状態は WebView の notify シグナルで更新する(§12: プロパティ通知にバインド、
+/// ポーリングしない)。モードインジケータは WebView のプロパティではなくモード遷移で変わるため
+/// (§12: `set_mode` から更新)、そのラベルを呼び出し側(M3 の `input`)へ返して結線させる。
+fn build_status_bar(web_view: &WebView) -> (gtk4::Box, Label) {
     install_css();
 
     let bar = gtk4::Box::new(Orientation::Horizontal, 8);
     bar.add_css_class("owl-statusbar");
 
-    // モードインジケータ(§5-2: `-- INSERT --` 相当、normal 時は空)。M2 ではモード遷移が
-    // 無いため常に空。内容更新(set_mode → ラベル)は M3 で結線する。ラベル枠のみ用意する。
+    // モードインジケータ(§5-2: `-- INSERT --` 相当、normal 時は空)。初期は Normal で空。
+    // 内容更新は M3 のキー結線(`input::install` → `keys::mode_indicator`)が担う(§12)。
     let mode = Label::new(None);
 
     // URL(§12: notify::uri)。余白を占め、長い URL は末尾省略する。
@@ -115,7 +123,7 @@ fn build_status_bar(web_view: &WebView) -> gtk4::Box {
     let progress_label = progress.clone();
     web_view.connect_is_loading_notify(move |wv| update_progress(&progress_label, wv));
 
-    bar
+    (bar, mode)
 }
 
 /// 読み込み状態ラベルを現在の WebView プロパティで更新する(設計書 §12)。
