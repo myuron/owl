@@ -294,6 +294,11 @@ WebView のプロパティ通知にバインドする。ポーリングはしな
 ## 15. ビルド(Nix)
 
 - 既存の flake(`flake.nix` / `nix/rust.nix`)に `webkitgtk_6_0`・`gtk4` と `pkg-config` をネイティブ依存として追加する。
+- `glib-networking`(GIO の TLS バックエンド)を依存に加える。WebKitGTK(libsoup)は HTTPS 接続時に
+  TLS 実装を GIO モジュールとして `GIO_EXTRA_MODULES` 経由で動的ロードするため、これが無いと
+  すべての `https://` 接続(`:open` の検索を含む)が失敗する。`nix/rust.nix` では `buildInputs` に
+  入れて `wrapGAppsHook4` に `lib/gio/modules` を拾わせ、devShell では `shellHook` で
+  `GIO_EXTRA_MODULES` へ前置追記し、ホスト環境に依存せず TLS が効くようにする(issue #14)。
 - 実行時に GSettings スキーマと GLib 関連の環境が必要になるため、パッケージは `wrapGAppsHook4` でラップする。
 - `nix develop` の devShell にも同じ依存を入れ、`cargo build` が devShell 内で通ることを開発の基本ループとする。
 
