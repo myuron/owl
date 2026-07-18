@@ -245,14 +245,16 @@ GTK/WebKit を含むためユニットテスト対象外(design §14)。`window.
 
 ### 4-手動確認(docs/checklist.md M2)
 
-- [ ] `docs/checklist.md` に M2 セクションを追記し、`nix build` した `./result/bin/owl` で
-      ステータスバー表示・リンククリック追従・引数なし起動を目視確認する
+- [x] `docs/checklist.md` に M2 セクション(M2-01〜M2-13)を追記する
+- [ ] `nix build` した `./result/bin/owl` で ステータスバー表示・リンククリック追従・
+      引数なし起動を**目視確認**する(checklist M2-10〜M2-13、ユーザー環境で実施)
 
 ### 4-完了条件
 
-- [ ] `just ci`(fmt-check → lint → coverage → build)が緑になる
-- [ ] `nix build` が通り、起動してステータスバーに URL・タイトル・読み込み状態が表示される
-      (checklist M2-10〜M2-13)
+- [x] `just ci`(fmt-check → lint → coverage → mutants → build)が緑になる
+      (mutants ゲート追加後も緑。coverage は command.rs/keys.rs 100% 維持)
+- [ ] `nix build` した起動でステータスバーに URL・タイトル・読み込み状態が表示される
+      (checklist M2-10〜M2-13 の目視確認・上記 4-手動確認と同一)
 
 ---
 

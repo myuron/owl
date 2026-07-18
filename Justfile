@@ -21,7 +21,14 @@ coverage:
     --fail-under-regions 100 \
     --fail-under-lines 100
 
+# ミューテーションテスト: 純粋モジュール限定で「分岐内の挙動」の未検証を機械検出する
+# (CLAUDE.md 規約 4)。coverage は region の通過だけを見るため、丸めを truncate に
+# 変えても 100% のままだが、cargo-mutants はその mutant が生き残る(= テスト不足)ことを
+# 検出する。GTK 依存の結線ファイルは対象外(純粋ロジックのみを対象にする)。
+mutants:
+  cargo mutants --no-shuffle -f src/command.rs -f src/keys.rs
+
 build:
   nix build
 
-ci: fmt-check lint coverage build
+ci: fmt-check lint coverage mutants build

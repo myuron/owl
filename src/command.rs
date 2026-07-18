@@ -280,6 +280,18 @@ mod tests {
         );
     }
 
+    #[test]
+    fn p07_leading_digit_before_colon_is_not_scheme() {
+        // 規則 3 のスキームは英字始まり(§11: `^[a-zA-Z]...`)。先頭が数字なら ':' を
+        // 含んでもスキーム扱いしない(has_scheme の「英字始まり」判定を固定する)。`.` を
+        // 含まないため規則 5(検索)へ落ちる。P-25 は数字始まりでも `:` 無しのため、この
+        // ':' 前の英字始まり判定は別途固定する必要がある(cargo-mutants で顕在化)。
+        assert_eq!(
+            parse_open_input("1:2"),
+            Some("https://duckduckgo.com/?q=1%3A2".to_string())
+        );
+    }
+
     // --- 規則 4: ホスト名形式(https:// 補完)---
 
     #[test]
@@ -441,6 +453,14 @@ mod tests {
     #[test]
     fn s12_loading_full() {
         assert_eq!(format_load_progress(true, 1.0), "[100%]");
+    }
+
+    #[test]
+    fn s12_loading_rounds_half_up() {
+        // §12 doc の「四捨五入」を固定する。truncate 実装なら 99% になり落ちる値を選ぶ
+        // (CLAUDE.md 規約 4: coverage は分岐網羅であって挙動網羅ではない)。
+        // 0.425 は f64 で 42.4999… のため四捨五入でも 42% になり probe に使えない点に注意。
+        assert_eq!(format_load_progress(true, 0.999), "[100%]");
     }
 
     #[test]

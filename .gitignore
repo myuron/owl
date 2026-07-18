@@ -2,3 +2,6 @@
 /result
 /.direnv
 /.envrc
+# cargo-mutants(just mutants)の出力
+/mutants.out
+/mutants.out.old

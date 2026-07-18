@@ -10,9 +10,12 @@ vim ライクな GTK4/WebKitGTK 6 ベースのブラウザ(Rust)。設計は `do
 - `just test` — `cargo test`(GTK 不要の純粋ロジックのみで完結すること)
 - `just lint` — `cargo clippy -- -D warnings`(警告ゼロ必須)
 - `just coverage` — `cargo llvm-cov` で純粋ロジックの region/line カバレッジを **100%** に強制
-  (`main.rs` は除外)。未テストの `match` アームを機械的に検出するゲート。
+  (`main.rs` 等 GTK 依存は除外)。未テストの `match` アーム(=通らない region)を機械検出するゲート。
+- `just mutants` — `cargo-mutants` で純粋モジュール(`command.rs`/`keys.rs`)に限定した
+  ミューテーションテスト。**coverage が見ない「分岐内の挙動」の未検証(丸めを truncate に
+  変えても通る等、規約 4)を機械検出する**上位ゲート。survivor が出たらテストを足す。
 - `just fmt-check` / `just fmt` — フォーマット確認 / 適用
-- `just ci` — `fmt-check → lint → coverage → build` を通す(PR 前に必ず緑にする)
+- `just ci` — `fmt-check → lint → coverage → mutants → build` を通す(PR 前に必ず緑にする)
 
 ## ワークフロー
 
@@ -22,6 +25,11 @@ vim ライクな GTK4/WebKitGTK 6 ベースのブラウザ(Rust)。設計は `do
   `keys.rs` の `resolve_key` 等)は gtk/webkit クレートに依存させない。副作用(実スクロール・
   クリップボード・DOM 操作・ステータスバー更新)は呼び出し側が担う。
 - 作業は `main` から新しいブランチを切り、PR を作る(コミット/プッシュはユーザーの指示で行う)。
+- **実装が `design.md` と食い違ったら、同一 PR で `design.md` を更新する。** マイルストーンの
+  再スコープ(例: M2 のナビゲーションを M3 へ移動)・前倒し(例: 引数 URL を M1 へ)・技術判断の
+  変更は、`docs/todo.md`/`checklist.md` だけでなく**権威ドキュメントである `design.md`(§16 等)へ
+  必ず反映する**(M1 が §17 を更新した precedent に倣う)。`docs/todo.md` の完了条件チェックボックスは
+  実態と一致させ、同一コミットで更新する。
 - **`main` へのマージは勝手にしない。** マージはユーザーが明示的に指示したときだけ実行する
   (`gh pr merge` を自己判断で叩かない)。基本フローは「ブランチ → コミット → push → PR 作成」で止める。
 
@@ -48,9 +56,19 @@ vim ライクな GTK4/WebKitGTK 6 ベースのブラウザ(Rust)。設計は `do
    関数の doc コメントではなく**型(struct)で強制**する。
    - 悪例: `set_mode(_pending, mode) -> (mode, None)` — 第1引数を無視し、不変条件が
      コメントにしかない。状態を持つなら `struct` + メソッドにして不変条件を型で表す。
+   - **時間的不変条件(「起動時 1 回だけ呼ぶ」等)もコメントで担保しない。** 呼び出しを
+     「1 回」が構造的に真になる場所(起動側)へ移すか、`std::sync::Once` 等で強制する。
+     - 悪例: per-window の関数から `install_css` を呼び、「`NON_UNIQUE` なので 1 回」を
+       doc コメントにだけ書く(2 ウィンドウ化・再 `activate` で静かに壊れる)。
 
 4. **`test.md` の 1 ID は期待結果の全節をアサートする。** 「クリアされる」だけでなく
    「クリア後に次のキーが新規シーケンスとして扱われる」まで、仕様の記述を余さず検証する。
+   - **`just coverage` の 100% は「分岐の網羅」であって「挙動の網羅」ではない。** doc/仕様が
+     具体挙動(丸め・エンコード・順序・クランプ等)を主張するなら、**誤実装でも同じ region を
+     通る**ため coverage では検出できない。**誤実装で落ちる値を最低 1 つ**テストに選ぶ。
+     - 悪例: 丸めの検証に `0.42`(round でも truncate でも `42%`)だけを使う。
+       正: `0.999`(round=`100%`、truncate=`99%`)を足し、`round()` を truncate に
+       変えたら落ちるようにする。この型は `just mutants`(cargo-mutants)でも機械検出する。
 
 5. **仕様表を実装するときは全行を網羅する。** 未対応の行(例: 修飾キー `Ctrl+d`/`Ctrl+u`)は、
    黙って落とさず「未実装」と分かる形(TODO コメント/型で表現不能なら doc に明記)にする。

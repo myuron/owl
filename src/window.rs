@@ -8,6 +8,8 @@
 //! に委譲する(§4 の純粋ロジック分離)。コマンドライン(§5-3)は M4。WebView の生成・
 //! 設定(NetworkSession・`load_uri` 等 §8)は webview.rs に委譲する(§4)。
 
+use std::sync::Once;
+
 use gtk4::pango::EllipsizeMode;
 use gtk4::prelude::*;
 use gtk4::{Align, Application, ApplicationWindow, CssProvider, Label, Orientation};
@@ -83,11 +85,10 @@ fn build_status_bar(web_view: &WebView) -> gtk4::Box {
     title.set_max_width_chars(40);
 
     // 読み込み状態(§12: notify::is-loading + estimated-load-progress)。右端に置く。
-    let progress = Label::new(Some(&command::format_load_progress(
-        web_view.is_loading(),
-        web_view.estimated_load_progress(),
-    )));
+    // 初期値・以降の更新とも `update_progress` に一本化する。
+    let progress = Label::new(None);
     progress.set_halign(Align::End);
+    update_progress(&progress, web_view);
 
     bar.append(&mode);
     bar.append(&url);
@@ -106,38 +107,45 @@ fn build_status_bar(web_view: &WebView) -> gtk4::Box {
         title_label.set_text(wv.title().as_deref().unwrap_or_default());
     });
 
-    // 読み込み状態は is-loading・estimated-load-progress の両方で更新する。表示文字列の
-    // 組み立ては純粋関数 `command::format_load_progress`(§12)へ委譲する。
+    // 読み込み状態は is-loading・estimated-load-progress の両方で更新する(§12)。両ハンドラは
+    // 同一処理のため `update_progress` に括り出す(重複排除)。片方だけだと完了時に `[100%]`
+    // が残る/更新が飛ぶため、両方の notify に結線する必要がある。
     let progress_label = progress.clone();
-    web_view.connect_estimated_load_progress_notify(move |wv| {
-        progress_label.set_text(&command::format_load_progress(
-            wv.is_loading(),
-            wv.estimated_load_progress(),
-        ));
-    });
+    web_view.connect_estimated_load_progress_notify(move |wv| update_progress(&progress_label, wv));
     let progress_label = progress.clone();
-    web_view.connect_is_loading_notify(move |wv| {
-        progress_label.set_text(&command::format_load_progress(
-            wv.is_loading(),
-            wv.estimated_load_progress(),
-        ));
-    });
+    web_view.connect_is_loading_notify(move |wv| update_progress(&progress_label, wv));
 
     bar
 }
 
-/// ステータスバーの CSS をディスプレイへ適用する(設計書 §5)。
+/// 読み込み状態ラベルを現在の WebView プロパティで更新する(設計書 §12)。
 ///
-/// `NON_UNIQUE`(§13-1)によりプロセス毎に 1 ウィンドウのため、本関数は起動毎に 1 度だけ
-/// 呼ばれる。配色・等幅フォントの最小限のみをハードコードする(§5)。
+/// 初期化と is-loading / estimated-load-progress の両 notify から共用する。表示文字列の
+/// 組み立ては純粋関数 `command::format_load_progress`(§12)へ委譲する。
+fn update_progress(label: &Label, web_view: &WebView) {
+    label.set_text(&command::format_load_progress(
+        web_view.is_loading(),
+        web_view.estimated_load_progress(),
+    ));
+}
+
+/// ステータスバーの CSS をディスプレイへ適用する(設計書 §5)。配色・等幅フォントの
+/// 最小限のみをハードコードする。
+///
+/// per-window の `build_status_bar` から呼ばれるが、Display への provider 追加は 1 回で
+/// 足りる。「1 回」を呼び出し側の前提(`NON_UNIQUE` §13-1)に依存させず、`Once` で構造的に
+/// 担保する(CLAUDE.md 規約 3: 時間的不変条件はコメントでなく型/構造で強制する)。
 fn install_css() {
-    let provider = CssProvider::new();
-    provider.load_from_string(STATUS_BAR_CSS);
-    if let Some(display) = gtk4::gdk::Display::default() {
-        gtk4::style_context_add_provider_for_display(
-            &display,
-            &provider,
-            gtk4::STYLE_PROVIDER_PRIORITY_APPLICATION,
-        );
-    }
+    static CSS_ONCE: Once = Once::new();
+    CSS_ONCE.call_once(|| {
+        let provider = CssProvider::new();
+        provider.load_from_string(STATUS_BAR_CSS);
+        if let Some(display) = gtk4::gdk::Display::default() {
+            gtk4::style_context_add_provider_for_display(
+                &display,
+                &provider,
+                gtk4::STYLE_PROVIDER_PRIORITY_APPLICATION,
+            );
+        }
+    });
 }
