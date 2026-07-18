@@ -155,7 +155,53 @@ insert 自動移行は M6。
 
 | ID | 手順 | 期待結果 | 結果 |
 |---|---|---|---|
-| M3-50 | `:` または `f` を押す | 現状 **inert**: 何も起きず、モードは Normal のまま(トラップしない)。M4/M5 で本結線 | (実施予定) |
+| M3-50 | `f` を押す | 現状 **inert**: 何も起きず、モードは Normal のまま(トラップしない)。M5 で本結線。※`:`(Command)は M4 で本結線済み — 挙動は M4-10〜M4-24 で確認する | (実施予定) |
 | M3-51 | Normal モードで矢印キー / PageUp / PageDown | 消費されて無反応(§7.2: 未割当の修飾なしキーはページに漏らさない)。スクロールは `h/j/k/l`・`gg/G`・`Ctrl+d/u` を使う想定。**バグではなく仕様**(既知の制限) | (実施予定) |
 | M3-52 | 内側 `div` がスクロールコンテナのページで `j` 等 | メインフレームが動かないため効かないことがある(§8.1 の既知の制限、MVP 許容)。**バグではない** | (実施予定) |
 | M3-53 | Normal で選択テキストに対し `Ctrl+C` | ページへ素通しし、コピーできる(§7.2: バインド外の修飾付きは Proceed) | (実施予定) |
+
+---
+
+## M4: command モード
+
+ゴール(design §16.4・§11・§5-3): 「`:` でコマンドライン(Entry)を開き、`:open <input>` で
+補完済み URL を開ける・`:quit` で終了できる・未知コマンドはステータスバーにエラー表示」。
+純粋ロジック(`command::parse_command`)はユニットテスト済み(test.md §1.7 CMD-01〜CMD-11)。
+ここでは GTK 結線(コマンドライン Entry の表示・実行・キャンセル、`input`)の実挙動を
+`nix build` した `./result/bin/owl` で手動確認する。
+
+**スコープ境界:** `f`(Hint)は M4 でも inert(M5 で本結線)。`:open` の補完規則そのもの
+(`parse_open_input`)は M1 で実装済み・テスト済みで、ここでは代表ケースの通し確認に留める。
+
+### M4.1 ビルド
+
+| ID | 手順 | 期待結果 | 結果 |
+|---|---|---|---|
+| M4-01 | `just ci`(fmt-check → lint → coverage → mutants → build) | 全ステップ緑。coverage は command.rs/keys.rs region/line 100% 維持(新 `parse_command` を含む)。mutants survivor ゼロ(84 mutants: 69 caught・15 unviable)。`input.rs`/`window.rs` は GTK 結線のため coverage 除外 | ✅ fmt-check / clippy(-D warnings)/ coverage(command.rs 432/432・keys.rs 541/541 region 100%)/ mutants(survivor 0)/ nix build 緑 |
+
+### M4.2 コマンドライン UI(design §5-3・§11)
+
+| ID | 手順 | 期待結果 | 結果 |
+|---|---|---|---|
+| M4-10 | Normal モードで `:` を押す | ウィンドウ最下部にコマンドライン(Entry)が現れ、初期値 `:` が入ってフォーカスされる。カーソルは `:` の後ろ(全選択されていない)。モードインジケータが `-- COMMAND --` | (実施予定) |
+| M4-11 | `:` を開いた状態で `open example.com` と入力 → Enter | `https://example.com` へ遷移(§11 規則 4 の https 補完)。コマンドラインが閉じ、Normal に戻る(インジケータが空)。ステータスバーの URL が追従 | (実施予定) |
+| M4-12 | `:open localhost:8080` → Enter | `http://localhost:8080` へ遷移(§11 規則 2)。※接続先が無ければ読み込み失敗でよい(補完先の確認が目的) | (実施予定) |
+| M4-13 | `:open rust 所有権` → Enter | DuckDuckGo 検索(`https://duckduckgo.com/?q=...` にエンコード)へ遷移(§11 規則 5) | (実施予定) |
+| M4-14 | `:quit` → Enter | ウィンドウが閉じ、プロセスが終了する(§11・§13-1: `NON_UNIQUE` の単一ウィンドウを閉じる) | (実施予定) |
+
+### M4.3 エラー・キャンセル(design §11)
+
+| ID | 手順 | 期待結果 | 結果 |
+|---|---|---|---|
+| M4-20 | `:foo` → Enter | ステータスバーのメッセージ欄に `unknown command: foo`(警告色)。コマンドラインは閉じ Normal に戻る。遷移しない | (実施予定) |
+| M4-21 | `:open`(引数なし)→ Enter | メッセージ欄に `usage: open <url or query>`。遷移しない | (実施予定) |
+| M4-22 | `:` を開いた状態で `Esc` | 入力を破棄してコマンドラインが閉じ、Normal に戻る(§11: Entry 上の EventControllerKey)。インジケータが空。読み込み中断は起きない | (実施予定) |
+| M4-23 | `:`(コロンのみ)→ Enter | 何も起きずコマンドラインが閉じ Normal に戻る(`Noop`) | (実施予定) |
+| M4-24 | エラー表示後に再度 `:` を開く | 前回のエラーメッセージがクリアされる(新しい入力の開始) | (実施予定) |
+
+### M4.4 スコープ外の安全確認
+
+| ID | 手順 | 期待結果 | 結果 |
+|---|---|---|---|
+| M4-30 | `f` を押す | 現状 **inert**: 何も起きず Normal のまま(M5 で本結線) | (実施予定) |
+| M4-31 | command モードで入力中に `j`/`k` 等 | ページへスクロールせず Entry へ文字入力される(§7.2: Command は全キー Proceed で Entry が処理) | (実施予定) |

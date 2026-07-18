@@ -69,8 +69,8 @@ src/
 ├── window.rs      // ウィンドウ構築: レイアウト、WebView・ステータスバー・コマンドラインの組み立て
 ├── webview.rs     // WebView 生成と設定: NetworkSession、永続化、各種シグナル(TLS/クラッシュ/ポップアップ/ダウンロード)
 ├── keys.rs        // 純粋なキー解決状態機械: Mode/Action、resolve_key(モード別解釈・gg/yy シーケンス)、set_mode、classify_input/scroll_script/mode_indicator。GTK 非依存でユニットテスト対象(§14)
-├── input.rs       // キー入力の GTK 結線(M3): EventControllerKey(capture phase)を取り付け、keys で判定した Action を実行(スクロール JS・ナビゲーション API・クリップボード・モード遷移の副作用)
-├── command.rs     // 純粋なコマンド/起動ロジック: :open のパース(§11)、initial_uri/app_subdir/format_load_progress。GTK 非依存でユニットテスト対象
+├── input.rs       // キー入力の GTK 結線(M3・M4): EventControllerKey(capture phase)を取り付け、keys で判定した Action を実行(スクロール JS・ナビゲーション API・クリップボード・モード遷移の副作用)。command モードは Entry の表示・実行(parse_command)・キャンセルもここ(§11)
+├── command.rs     // 純粋なコマンド/起動ロジック: コマンドディスパッチ parse_command(§11)、:open のパース parse_open_input(§11)、initial_uri/app_subdir/format_load_progress。GTK 非依存でユニットテスト対象
 ├── hints.rs       // hint モード: JS 側との連携、ラベル入力の転送(M5)
 └── page.js        // ページへ注入する UserScript(ヒント描画、focus 検知)— include_str! で埋め込む
 ```
@@ -88,8 +88,8 @@ src/
 `gtk::ApplicationWindow` 直下に縦の `gtk::Box`:
 
 1. **WebView** — `vexpand = true`。ページ表示領域。
-2. **ステータスバー** — 高さ 1 行の `gtk::Box`。左から: モードインジケータ(`-- INSERT --` 相当。normal 時は空)、URL、ページタイトル。右端に読み込み状態。それぞれ `gtk::Label`(URL・タイトルは ellipsize)。
-3. **コマンドライン** — `gtk::Entry`。command モード時のみ `set_visible(true)` にしてフォーカスを移す。
+2. **ステータスバー** — 高さ 1 行の `gtk::Box`。左から: モードインジケータ(`-- INSERT --` 相当。normal 時は空)、メッセージ欄(コマンドのエラー表示 §11、将来 §8.5 の「download blocked」もここ。通常は空)、URL、ページタイトル。右端に読み込み状態。それぞれ `gtk::Label`(URL・タイトルは ellipsize、メッセージは警告色)。
+3. **コマンドライン** — `gtk::Entry`。command モード時のみ `set_visible(true)` にして初期値 `:` を入れフォーカスを移す(M4 で結線)。Enter で `parse_command` を実行、Esc(Entry 上の `EventControllerKey`)でキャンセルし normal へ戻す(§11)。
 
 ツールバー・メニューバーは持たない(要求 5 章)。CSS は最小限(ステータスバーの配色・等幅フォント)を `gtk::CssProvider` でハードコードする。
 
@@ -246,7 +246,8 @@ page.js は `UserContentManager::add_script`(`UserScript`、document-start、全
 ## 11. command モードと `:open`
 
 - `:` で Entry を表示し、初期値 `":"` を入れてフォーカス。Entry の `activate`(Enter)でパース・実行、`Esc`(Entry 上の EventControllerKey)でキャンセル。
-- コマンドは `:open <input>` と `:quit` の 2 つ。前方一致補完はしない(MVP)。未知コマンドはステータスバーにエラー表示。
+- コマンドは `:open <input>` と `:quit` の 2 つ。前方一致補完はしない(MVP)。コマンド名は大文字小文字を区別する。未知コマンドと `:open` の空引数はステータスバーのメッセージ欄(§5-2)にエラー表示する(`usage: open <url or query>` / `unknown command: <name>`)。
+- コマンドライン入力(先頭 `:`)を `Command`(`Open`/`Quit`/`Noop`/`Error`)へ分類する純粋関数 `parse_command(&str) -> Command` を `command.rs` に置き、ユニットテストを書く(§14)。先頭 `:` を 1 個剥がして trim し、最初の空白でコマンド名と引数に分割、`:open` の引数は `parse_open_input` で補完済み URL に解決する。実際の `load_uri`・終了・エラー表示等の副作用は呼び出し側(`input`)が行う。`:quit` はアプリの単一ウィンドウを閉じる(§13-1 の `NON_UNIQUE`)。
 
 `:open` の入力解釈(要求 3.3 の規則を実装仕様として詳細化)。入力はまず前後の空白を trim し、以下を上から順に適用する:
 

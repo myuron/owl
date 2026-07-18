@@ -1,20 +1,23 @@
-//! command モード: `:open` の入力解釈、および起動時の GTK 非依存な純粋ヘルパー。
+//! command モード: コマンドのディスパッチ・`:open` の入力解釈、および起動時の GTK 非依存な
+//! 純粋ヘルパー。
 //!
-//! `parse_open_input` は `:open` のパース(設計書 §11)。加えて、GTK 側(起動フロー・
+//! `parse_command` はコマンドライン入力(`:open`/`:quit`/未知)の分類(設計書 §11)、
+//! `parse_open_input` は `:open` の URL 補完(§11)。加えて、GTK 側(起動フロー・
 //! ステータスバー)が必要とする純粋ロジック — 初期 URL 決定(`initial_uri`, §13-3)、
 //! NetworkSession の data/cache ディレクトリ算出(`app_subdir`, §8.2)、ステータスバーの
 //! 読み込み状態表示(`format_load_progress`, §12)— をここに集約する。いずれも gtk/webkit
 //! に依存せず単体テストできる形にし、実際の `load_uri`・ディレクトリ作成・ラベル更新・
-//! エラー表示等の副作用は呼び出し側(`window`/`webview`)が担う(設計書 §4 の純粋ロジック
-//! 分離)。`parse_open_input` は M4 で結線されるまで未使用のため、モジュール全体に
-//! dead_code を許可する。
-#![allow(dead_code)]
+//! 終了・エラー表示等の副作用は呼び出し側(`input`/`window`/`webview`)が担う(設計書 §4 の
+//! 純粋ロジック分離)。
 
 use std::path::{Path, PathBuf};
 
 const DUCKDUCKGO_SEARCH: &str = "https://duckduckgo.com/?q=";
 const HTTP_SCHEME: &str = "http://";
 const HTTPS_SCHEME: &str = "https://";
+
+/// `:open` の引数が空(`parse_open_input` が `None`)のときの使用法エラー(設計書 §11)。
+const OPEN_USAGE: &str = "usage: open <url or query>";
 
 /// 起動引数が無いときの初期 URL(設計書 §13-3)。
 const BLANK_URI: &str = "about:blank";
@@ -54,6 +57,53 @@ pub fn format_load_progress(is_loading: bool, progress: f64) -> String {
         return String::new();
     }
     format!("[{}%]", (progress * 100.0).round() as u32)
+}
+
+/// command モードのコマンドライン入力を解釈した結果(設計書 §11)。
+///
+/// 副作用(`load_uri`・終了・エラー表示)は呼び出し側(`input`)が担う(設計書 §4 の
+/// 純粋ロジック分離)。`Open` の URL は `parse_open_input` で補完済み(呼び出し側は
+/// そのまま `load_uri` するだけ)。`Error` の文字列はステータスバーへそのまま表示する。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Command {
+    /// `:open <input>` → 補完済み URL を読み込む。
+    Open(String),
+    /// `:quit` → 終了する。
+    Quit,
+    /// 空(`:` のみ・空白のみ・空文字列)→ 何もせず Normal へ戻すだけ。
+    Noop,
+    /// 未知コマンド、または `:open` の空引数 → ステータスバーにエラー表示。
+    Error(String),
+}
+
+/// command モードのコマンドライン入力を `Command` へ分類する(設計書 §11)。
+///
+/// 入力は Entry の初期値 `:`(§5-3)から始まる。先頭 `:` を 1 個だけ剥がし、trim してから
+/// 最初の空白でコマンド名と引数に分割する。コマンドは `:open <input>` と `:quit` の 2 つ
+/// (前方一致補完はしない。MVP)。コマンド名は大文字小文字を区別する。`:open` の引数は
+/// `parse_open_input`(§1)で補完済み URL に解決する。空入力は `Noop`、未知コマンドと
+/// `:open` の空引数は `Error`。
+pub fn parse_command(input: &str) -> Command {
+    // 先頭 `:`(コマンドプロンプト)を 1 個だけ剥がして trim する。先頭が `:` でなければ
+    // そのまま(Entry が空・`:` を消された場合の堅牢性)。
+    let body = input.strip_prefix(':').unwrap_or(input).trim();
+    if body.is_empty() {
+        return Command::Noop;
+    }
+    // 最初の空白でコマンド名と引数へ分割する(空白がなければ引数なし)。引数側の trim は
+    // `parse_open_input` が担うためここではしない。
+    let (name, rest) = match body.split_once(char::is_whitespace) {
+        Some((name, rest)) => (name, rest),
+        None => (body, ""),
+    };
+    match name {
+        "open" => match parse_open_input(rest) {
+            Some(url) => Command::Open(url),
+            None => Command::Error(OPEN_USAGE.to_string()),
+        },
+        "quit" => Command::Quit,
+        _ => Command::Error(format!("unknown command: {name}")),
+    }
 }
 
 /// `:open <input>` の入力を解釈して遷移先 URL を返す(`None` = 空入力)。
@@ -153,8 +203,89 @@ fn percent_encode(s: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{app_subdir, format_load_progress, initial_uri, parse_open_input};
+    use super::{
+        Command, app_subdir, format_load_progress, initial_uri, parse_command, parse_open_input,
+    };
     use std::path::{Path, PathBuf};
+
+    // --- 1.7 parse_command(command モードのコマンドディスパッチ、§11)---
+
+    #[test]
+    fn cmd01_quit() {
+        assert_eq!(parse_command(":quit"), Command::Quit);
+    }
+
+    #[test]
+    fn cmd02_open_host_is_completed() {
+        // 引数を parse_open_input で補完済み URL に解決する(生 `example.com` ではない)。
+        assert_eq!(
+            parse_command(":open example.com"),
+            Command::Open("https://example.com".to_string())
+        );
+    }
+
+    #[test]
+    fn cmd03_open_without_arg_is_usage_error() {
+        // parse_open_input が None(空引数)→ 使用法エラー(文字列を厳密に固定)。
+        assert_eq!(
+            parse_command(":open"),
+            Command::Error("usage: open <url or query>".to_string())
+        );
+    }
+
+    #[test]
+    fn cmd04_unknown_command_is_error() {
+        assert_eq!(
+            parse_command(":foo"),
+            Command::Error("unknown command: foo".to_string())
+        );
+    }
+
+    #[test]
+    fn cmd05_colon_only_is_noop() {
+        assert_eq!(parse_command(":"), Command::Noop);
+    }
+
+    #[test]
+    fn cmd06_empty_is_noop() {
+        // Entry が空にクリアされた場合の堅牢性。
+        assert_eq!(parse_command(""), Command::Noop);
+    }
+
+    #[test]
+    fn cmd07_without_leading_colon() {
+        // strip_prefix(':') の非該当分岐(先頭が `:` でない)。
+        assert_eq!(parse_command("quit"), Command::Quit);
+    }
+
+    #[test]
+    fn cmd08_open_search_query_with_space() {
+        // 引数が空白を含んでも rest として parse_open_input へ渡る(検索へ)。
+        assert_eq!(
+            parse_command(":open hello world"),
+            Command::Open("https://duckduckgo.com/?q=hello%20world".to_string())
+        );
+    }
+
+    #[test]
+    fn cmd09_command_name_is_case_sensitive() {
+        // コマンド名は大文字小文字を区別する(`:OPEN` は未知コマンド)。
+        assert_eq!(
+            parse_command(":OPEN example.com"),
+            Command::Error("unknown command: OPEN".to_string())
+        );
+    }
+
+    #[test]
+    fn cmd10_quit_ignores_trailing_args() {
+        assert_eq!(parse_command(":quit now"), Command::Quit);
+    }
+
+    #[test]
+    fn cmd11_surrounding_whitespace_is_trimmed() {
+        // 先頭 `:` 除去後に trim してから分割する(trim を外すと name が "" になり落ちる)。
+        assert_eq!(parse_command(":  quit  "), Command::Quit);
+    }
 
     // --- 規則 1: 前処理(trim・空入力)---
 

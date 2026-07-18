@@ -76,6 +76,28 @@
 | P-41 | `localhost`(規則 2 と 5 の両方に該当しうる) | 規則 2 が勝つ(`http://localhost`) |
 | P-42 | `localhost:8080`(規則 2 と 3 の両方に該当。`localhost:` はスキーム正規表現にもマッチ) | 規則 2 が勝つ(`http://localhost:8080`。スキームとして素通ししない) |
 
+### 1.7 `parse_command`(command.rs)— §11 のコマンドディスパッチ
+
+command モード(§11)のコマンドライン入力(先頭 `:`)を `Command` へ分類する純粋関数
+`parse_command(&str) -> Command`。`:open <input>` は引数を `parse_open_input`(§1)で補完済み
+URL に解決する。エラーメッセージは呼び出し側(ステータスバー)がそのまま表示するため、
+文字列を厳密にアサートする(CLAUDE.md 規約 4)。先頭 `:` は 1 個だけ剥がし、trim してから
+最初の空白でコマンド名と引数に分割する。コマンド名は大文字小文字を区別する(`:OPEN` は未知)。
+
+| ID | 入力 | 期待結果 |
+|---|---|---|
+| CMD-01 | `:quit` | `Command::Quit` |
+| CMD-02 | `:open example.com` | `Command::Open("https://example.com")`(引数を `parse_open_input` で補完) |
+| CMD-03 | `:open`(引数なし) | `Command::Error("usage: open <url or query>")`(`parse_open_input` が `None`) |
+| CMD-04 | `:foo`(未知コマンド) | `Command::Error("unknown command: foo")` |
+| CMD-05 | `:`(コロンのみ) | `Command::Noop`(何もしない・遷移だけ戻す) |
+| CMD-06 | `""`(空文字列) | `Command::Noop`(Entry が空でクリアされた場合の堅牢性) |
+| CMD-07 | `quit`(先頭 `:` なし) | `Command::Quit`(`strip_prefix(':')` の非該当分岐) |
+| CMD-08 | `:open hello world`(空白入りクエリ) | `Command::Open("https://duckduckgo.com/?q=hello%20world")`(引数が空白を含んでも `parse_open_input` へ渡る) |
+| CMD-09 | `:OPEN example.com`(大文字コマンド) | `Command::Error("unknown command: OPEN")`(コマンド名は大文字小文字を区別) |
+| CMD-10 | `:quit now`(quit に余分な引数) | `Command::Quit`(quit は引数を無視) |
+| CMD-11 | `:  quit  `(前後空白) | `Command::Quit`(先頭 `:` 除去後に trim してから分割) |
+
 ## 2. キーシーケンスの状態遷移(keys.rs)
 
 §7.3: Normal モードで `g`・`y` は `pending_key` に記録。次のキーで解決する。GTK イベントに依存しない純粋な状態遷移関数として切り出してテストする。
