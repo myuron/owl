@@ -51,6 +51,9 @@ pub enum Action {
     CopyUrl,
     StopLoading,
     EnterMode(Mode),
+    /// Hint モードのラベル文字を JS(`owlHints.input(ch)`)へ転送する(§9.1・§9.2)。
+    /// 実際の `evaluate_javascript` 呼び出しは呼び出し側(`input`)が担う。
+    HintInput(char),
 }
 
 /// イベントの伝播(設計書 §7.1)。`Stop` = owl が消費、`Proceed` = 素通し。
@@ -112,9 +115,12 @@ pub fn resolve_key(
         },
         // Command: すべて素通し(Entry が処理。Esc/Enter は Entry 側で拾う。§7.2)。
         Mode::Command => (KeyOutcome::proceed(), None),
-        // Hint: すべて Stop。Esc は Normal へ。ラベル文字の JS 転送は M5 で結線(§7.2・§9)。
+        // Hint: すべて Stop(ラベル文字をページに漏らさない。§7.2)。Esc は Normal へ戻り、
+        // 文字は `HintInput` として呼び出し側へ渡し `owlHints.input(ch)` へ転送させる(§9.1・§9.2)。
+        // 非文字キー(Ctrl/特殊/他修飾)はアクションなしで Stop(§7.2、K-63〜65)。
         Mode::Hint => match input {
             KeyInput::Esc => (KeyOutcome::act(Action::EnterMode(Mode::Normal)), None),
+            KeyInput::Char(ch) => (KeyOutcome::act(Action::HintInput(ch)), None),
             _ => (KeyOutcome::stop(), None),
         },
     }
@@ -429,12 +435,16 @@ mod tests {
     }
 
     #[test]
-    fn hint_char_is_stopped() {
-        // Hint はすべて Stop(ラベル文字はページに漏らさない。§7.2)
-        let (outcome, pending) = resolve_key(None, Mode::Hint, KeyInput::Char('a'));
-        assert_eq!(outcome.action, None);
-        assert_eq!(outcome.propagation, Propagation::Stop);
-        assert_eq!(pending, None);
+    fn k67_hint_char_forwards_input() {
+        // §9.1・§9.2: Hint モードのラベル文字は Stop(ページに漏らさない)しつつ、その文字を
+        // `HintInput` として呼び出し側へ渡す(呼び出し側が `owlHints.input(ch)` へ転送する)。
+        // 誤って別の文字を返す mutant を落とすため、複数文字で正しい char を運ぶことをアサートする。
+        for ch in ['a', 's', 'z'] {
+            let (outcome, pending) = resolve_key(None, Mode::Hint, KeyInput::Char(ch));
+            assert_eq!(outcome.action, Some(Action::HintInput(ch)), "char {ch:?}");
+            assert_eq!(outcome.propagation, Propagation::Stop, "char {ch:?}");
+            assert_eq!(pending, None, "char {ch:?}");
+        }
     }
 
     #[test]
@@ -699,6 +709,8 @@ mod tests {
     fn s09_non_scroll_actions_have_no_script() {
         assert_eq!(scroll_script(Action::Back), None);
         assert_eq!(scroll_script(Action::CopyUrl), None);
+        // HintInput もスクロールではない(呼び出し側が `owlHints.input` へ転送する。§9.2)。
+        assert_eq!(scroll_script(Action::HintInput('a')), None);
     }
 
     // --- 2.10 mode_indicator(Mode → ステータスバー表示)---

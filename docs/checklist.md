@@ -206,3 +206,43 @@ insert 自動移行は M6。
 | M4-30 | `f` を押す | 現状 **inert**: 何も起きず Normal のまま(M5 で本結線) | (実施予定) |
 | M4-31 | command モードで入力中に `j`/`k` 等 | ページへスクロールせず Entry へ文字入力される(§7.2: Command は全キー Proceed で Entry が処理) | (実施予定) |
 | M4-32 | command モード中に WebView 本体をマウスでクリック | Entry のフォーカスは外れるがモードは Command のまま(インジケータは `-- COMMAND --` 継続、キーはページへ Proceed)。Entry をクリックし直すか、`Esc`/`Enter` で復帰できる。**バグではなく既知の制限**(M3-51/52 と同種、MVP 許容)。将来直すなら Entry の focus-leave で `leave_command` | (実施予定) |
+
+---
+
+## M5: hint モード
+
+ゴール(design §16.5・§9・§10): 「`f` でクリック可能要素にラベルを重畳表示し、ラベルを
+タイプして対象を選択(クリック相当)する。リンク選択時は遷移して Normal へ、テキスト入力欄
+選択時は focus して Insert へ、`Esc` でキャンセルして Normal へ戻る」(要求 §3.3)。純粋ロジック
+(`hints.rs` の JS 文字列生成・メッセージ解釈、`keys.rs` の `HintInput`)はユニットテスト済み
+(test.md §2.11 H-01〜H-16・K-67)。ここでは GTK/JS 結線(page.js の描画・確定、`owlHints.*` 駆動、
+script message handler 受信、モード遷移)の実挙動を `nix build` した `./result/bin/owl` で手動確認する。
+
+**スコープ境界:** §10 の insert 自動移行(mousedown 相関の focus 検知)は M6。クロスオリジン
+iframe 内のヒントは MVP 非保証(§17、メインフレームのみ動作保証)。エラーページ等(§8)は M7。
+
+### M5.1 ビルド
+
+| ID | 手順 | 期待結果 | 結果 |
+|---|---|---|---|
+| M5-01 | `just ci`(fmt-check → lint → coverage → mutants → build) | 全ステップ緑。coverage は command.rs/keys.rs/hints.rs region/line 100% 維持(新 `hints.rs`・`Action::HintInput` を含む)。mutants survivor ゼロ(107 mutants: 91 caught・16 unviable、`-f src/hints.rs` 追加)。`input.rs`/`webview.rs` は GTK 結線のため coverage 除外、`page.js` は JS のため対象外 | ✅ fmt-check / clippy(-D warnings)/ coverage(command.rs 432/432・keys.rs 550/550・hints.rs 185/185 region 100%)/ mutants(survivor 0)/ nix build 緑 |
+
+### M5.2 ヒント表示・選択(design §9.2・§9.3・§9.4)
+
+| ID | 手順 | 期待結果 | 結果 |
+|---|---|---|---|
+| M5-10 | リンクの多いページ(例: `https://example.com` から辿った一覧)で `f` を押す | ビューポート内のクリック可能要素(`a[href]`・`button`・入力欄等)にホームロー(`sadfjklewcmpgh`)のラベルが重畳表示される。モードインジケータが `-- HINT --`。要素数に応じ 1〜2 文字ラベル(§9.3) | (実施予定) |
+| M5-11 | ラベルを 1 文字タイプ(2 文字ラベルの場合は 1 文字目) | 前方一致で候補が絞り込まれ、一致しないラベルは消える(§9.2) | (実施予定) |
+| M5-12 | リンクのラベルを最後までタイプして確定 | 対象リンクがクリックされ(`.click()`)遷移。オーバーレイが消え、Normal に戻る(インジケータ空)。ステータスバーの URL が追従(§9.2 `hint_result:link`) | (実施予定) |
+| M5-13 | テキスト入力欄のラベルをタイプして確定 | 入力欄が focus され(`.focus()`)、Insert へ遷移(インジケータ `-- INSERT --`)。以後キー入力が入力欄へ届く(§9.2 `hint_result:input`) | (実施予定) |
+| M5-14 | Hint 表示中に候補に無い文字をタイプ | 候補全滅として Normal に戻る(インジケータ空、§9.2 `hint_none`)。オーバーレイが消える | (実施予定) |
+
+### M5.3 キャンセル・スコープ外・既知の制限(design §9・§17)
+
+| ID | 手順 | 期待結果 | 結果 |
+|---|---|---|---|
+| M5-20 | Hint 表示中に `Esc` | オーバーレイが消え(`owlHints.cancel()`)、Normal に戻る(インジケータ空)。読み込み中断は起きない | (実施予定) |
+| M5-21 | クリック可能要素が無い/ビューポート外だけのページで `f` | 候補 0 件で即 Normal に戻る(§9.2 `hint_none`)。オーバーレイは出ない | (実施予定) |
+| M5-22 | `about:blank`(引数なし起動)で `f` | 何も表示されず Normal のまま(候補 0 件で無害。§17) | (実施予定) |
+| M5-23 | クロスオリジン iframe を含むページで `f` | メインフレームの要素のみラベル表示される(iframe 内は MVP 非保証。§17)。**バグではなく既知の制限** | (実施予定) |
+| M5-24 | Insert 遷移後(M5-13)に `Esc` | Normal に戻り、入力欄の focus が外れる(M3 の Insert→Normal と同じ挙動) | (実施予定) |

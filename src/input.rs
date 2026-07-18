@@ -24,7 +24,9 @@ use webkit6::WebView;
 use webkit6::prelude::*;
 
 use crate::command::{self, Command};
+use crate::hints::{self, HintMessage};
 use crate::keys::{self, Action, Mode};
+use crate::webview::HINT_MESSAGE_HANDLER;
 
 /// アプリの中心状態(設計書 §3.3)。`Copy` なので `Rc<Cell<..>>` で各ハンドラへ配れる。
 #[derive(Debug, Clone, Copy)]
@@ -75,6 +77,7 @@ pub fn install(
         message_label,
         &state,
     );
+    install_hint_message_handler(web_view, mode_label, &state);
 }
 
 /// ウィンドウの capture-phase キーコントローラ(§7.1)を取り付ける。
@@ -224,6 +227,10 @@ fn dispatch(
                 current,
             );
         }
+        // §9.2: Hint モードのラベル文字を `owlHints.input(ch)` へ転送する。絞り込み・確定と
+        // その後のモード遷移は page.js → メッセージハンドラ(`install_hint_message_handler`)側で
+        // 起きるため、ここではモードを変えず Hint に留まる。
+        Action::HintInput(ch) => eval_js(web_view, &hints::input_script(ch)),
         // スクロール系は上の `scroll_script` で処理済み(到達しない)。網羅性のため明示する。
         Action::ScrollLeft
         | Action::ScrollRight
@@ -252,6 +259,11 @@ fn apply_enter_mode(
             Mode::Insert
         }
         Mode::Normal => {
+            // §9.2: Hint → Normal(Esc キャンセル)はオーバーレイを除去する。確定経由の
+            // Hint → Normal は page.js が除去済みでこの経路を通らない(メッセージハンドラ側)。
+            if current == Mode::Hint {
+                eval_js(web_view, hints::cancel_script());
+            }
             // §6: Insert → Normal はページ側の focus を外し、GTK フォーカスを WebView 本体へ戻す。
             eval_js(
                 web_view,
@@ -275,9 +287,15 @@ fn apply_enter_mode(
             mode_label.set_text(keys::mode_indicator(Mode::Command));
             Mode::Command
         }
-        // §16.5: Hint は M5 で本結線。ここで遷移させると全キーを Stop する(§7.2)ため、Rust から
-        // JS を駆動する結線が無い M4 では入力不能になる。M4 では inert に倒し、現在のモードに留まる。
-        Mode::Hint => current,
+        // §9: `f` で Hint モードへ。`owlHints.start()` で要素列挙・ラベル表示を駆動する。
+        // 以降のラベル文字は `Action::HintInput` として `owlHints.input(ch)` へ転送し、
+        // 確定/全滅時のモード遷移はメッセージハンドラが行う。GTK フォーカスは WebView 本体の
+        // ままにする(ラベル描画・click/focus は page.js が担うため移さない)。
+        Mode::Hint => {
+            eval_js(web_view, hints::start_script());
+            mode_label.set_text(keys::mode_indicator(Mode::Hint));
+            Mode::Hint
+        }
     }
 }
 
@@ -300,6 +318,47 @@ fn leave_command(
         mode: Mode::Normal,
         pending_key: None,
     });
+}
+
+/// JS → Rust の hint 結果メッセージ(script message handler `"owl"`)を結線する(設計書 §9.2)。
+///
+/// page.js が確定/全滅時に送るメッセージを `hints::parse_hint_message` で解釈し、モードを
+/// 遷移させる(`Link`/`None` → Normal、`Input` → Insert)。JS 側は既に click/focus と
+/// オーバーレイ除去を済ませている(§9)ため、ここでは中心状態とモードインジケータの更新に
+/// 留める(§6・§5-2)。ハンドラ名の登録・page.js 注入は `webview::build`(§4)が担う。
+fn install_hint_message_handler(
+    web_view: &WebView,
+    mode_label: &Label,
+    state: &Rc<Cell<AppState>>,
+) {
+    // UCM は `webview::build` が WebView に紐付け済み。取得できなければ hint は使えないが
+    // 起動は継続する(他機能は影響を受けない)。
+    let Some(content_manager) = web_view.user_content_manager() else {
+        return;
+    };
+
+    let state = state.clone();
+    let web_view = web_view.clone();
+    let mode_label = mode_label.clone();
+    content_manager.connect_script_message_received(
+        Some(HINT_MESSAGE_HANDLER),
+        move |_manager, value| {
+            let next = match hints::parse_hint_message(value.to_str().as_str()) {
+                // §9.2: リンククリック済み/候補 0 件は Normal へ。
+                HintMessage::Link | HintMessage::None => Mode::Normal,
+                // §9.2: テキスト入力欄 focus 済みは Insert へ。
+                HintMessage::Input => Mode::Insert,
+                // 未知メッセージ(M6 の focus 等・壊れた JSON)は無視する。
+                HintMessage::Ignore => return,
+            };
+            mode_label.set_text(keys::mode_indicator(next));
+            web_view.grab_focus();
+            state.set(AppState {
+                mode: next,
+                pending_key: None,
+            });
+        },
+    );
 }
 
 /// 注入 JS を fire-and-forget で評価する(設計書 §8.1)。結果・エラーは扱わない(スクロールや

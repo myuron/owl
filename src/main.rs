@@ -6,6 +6,7 @@
 //! テスト済み。純粋ロジックの `keys` は M3 で `input`(EventControllerKey 結線)から使う。
 
 mod command;
+mod hints;
 mod input;
 mod keys;
 mod webview;
