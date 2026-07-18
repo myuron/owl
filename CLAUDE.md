@@ -1,16 +1,17 @@
 # owl — 開発ガイド
 
-vim ライクな GTK4/WebKitGTK 6 ベースのブラウザ(Rust)。設計は `docs/design.md`、
-テスト項目は `docs/test.md`、実装手順は `docs/todo.md` にある。**着手前にこれらを読む。**
+vim ライクな GTK4/WebKitGTK 6 ベースのブラウザ(Rust)。要求は `docs/requirements.md`、
+設計は `docs/design.md`、テスト項目は `docs/test.md`、実装手順は `docs/todo.md`
+(進捗は `docs/checklist.md`)にある。**着手前にこれらを読む。**
 
 ## コマンド
 
-`Justfile` 経由で回す(CI は `just ci` を実行する):
+`Justfile` 経由で回す。**GTK/WebKit ネイティブ依存のため `just` 系はすべて `nix develop` 内で実行する**(CI も `nix develop --command just ci`):
 
 - `just test` — `cargo test`(GTK 不要の純粋ロジックのみで完結すること)
 - `just lint` — `cargo clippy -- -D warnings`(警告ゼロ必須)
 - `just coverage` — `cargo llvm-cov` で純粋ロジックの region/line カバレッジを **100%** に強制
-  (`main.rs` 等 GTK 依存は除外)。未テストの `match` アーム(=通らない region)を機械検出するゲート。
+  (`main.rs`/`window.rs`/`webview.rs` の GTK 依存は除外)。未テストの `match` アーム(=通らない region)を機械検出するゲート。
 - `just mutants` — `cargo-mutants` で純粋モジュール(`command.rs`/`keys.rs`)に限定した
   ミューテーションテスト。**coverage が見ない「分岐内の挙動」の未検証(丸めを truncate に
   変えても通る等、規約 4)を機械検出する**上位ゲート。survivor が出たらテストを足す。
@@ -24,7 +25,9 @@ vim ライクな GTK4/WebKitGTK 6 ベースのブラウザ(Rust)。設計は `do
 - **純粋ロジックと GTK を分離する。** テスト対象(`command.rs` の `parse_open_input`、
   `keys.rs` の `resolve_key` 等)は gtk/webkit クレートに依存させない。副作用(実スクロール・
   クリップボード・DOM 操作・ステータスバー更新)は呼び出し側が担う。
-- 作業は `main` から新しいブランチを切り、PR を作る(コミット/プッシュはユーザーの指示で行う)。
+- **最初にファイルを変更する前に、`main` から新しいブランチを切る。** どのファイルであれ
+  最初の編集に着手する前段でブランチを作成し、以降の作業はその上で行う(コミット/プッシュ・
+  PR 作成はユーザーの指示で行う)。既にトピックブランチ上にいるならそのまま使ってよい。
 - **実装が `design.md` と食い違ったら、同一 PR で `design.md` を更新する。** マイルストーンの
   再スコープ(例: M2 のナビゲーションを M3 へ移動)・前倒し(例: 引数 URL を M1 へ)・技術判断の
   変更は、`docs/todo.md`/`checklist.md` だけでなく**権威ドキュメントである `design.md`(§16 等)へ
@@ -32,6 +35,9 @@ vim ライクな GTK4/WebKitGTK 6 ベースのブラウザ(Rust)。設計は `do
   実態と一致させ、同一コミットで更新する。
 - **`main` へのマージは勝手にしない。** マージはユーザーが明示的に指示したときだけ実行する
   (`gh pr merge` を自己判断で叩かない)。基本フローは「ブランチ → コミット → push → PR 作成」で止める。
+- **PR を作成したら、`/review` をサブエージェントで実施する。** `gh pr create` の直後に、
+  Agent ツールで**最上位モデル(`model: fable` — Claude Fable 5)**のサブエージェントを起動し、
+  対象 PR 番号を渡して `/review` を回す。レビュー結果を取得してユーザーに要約提示する(マージはしない)。
 
 ## コーディング規約
 
