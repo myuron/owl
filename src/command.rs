@@ -1,12 +1,13 @@
 //! command モード: `:open` の入力解釈、および起動時の GTK 非依存な純粋ヘルパー。
 //!
-//! `parse_open_input` は `:open` のパース(設計書 §11)。加えて、起動フローで
-//! GTK 側が必要とする純粋ロジック — 初期 URL 決定(`initial_uri`, §13-3)、
-//! NetworkSession の data/cache ディレクトリ算出(`app_subdir`, §8.2)— を
-//! ここに集約する。いずれも gtk/webkit に依存せず単体テストできる形にし、実際の
-//! `load_uri`・ディレクトリ作成・エラー表示等の副作用は呼び出し側(`window`/
-//! `webview`)が担う(設計書 §4 の純粋ロジック分離)。`parse_open_input` は M4 で
-//! 結線されるまで未使用のため、モジュール全体に dead_code を許可する。
+//! `parse_open_input` は `:open` のパース(設計書 §11)。加えて、GTK 側(起動フロー・
+//! ステータスバー)が必要とする純粋ロジック — 初期 URL 決定(`initial_uri`, §13-3)、
+//! NetworkSession の data/cache ディレクトリ算出(`app_subdir`, §8.2)、ステータスバーの
+//! 読み込み状態表示(`format_load_progress`, §12)— をここに集約する。いずれも gtk/webkit
+//! に依存せず単体テストできる形にし、実際の `load_uri`・ディレクトリ作成・ラベル更新・
+//! エラー表示等の副作用は呼び出し側(`window`/`webview`)が担う(設計書 §4 の純粋ロジック
+//! 分離)。`parse_open_input` は M4 で結線されるまで未使用のため、モジュール全体に
+//! dead_code を許可する。
 #![allow(dead_code)]
 
 use std::path::{Path, PathBuf};
@@ -40,6 +41,19 @@ pub fn app_subdir(base: &Path) -> PathBuf {
 /// 呼び出し側(`main`/`webview`)が担う。
 pub fn initial_uri(arg: Option<&str>) -> &str {
     arg.unwrap_or(BLANK_URI)
+}
+
+/// ステータスバーの読み込み状態表示を組む(設計書 §12)。GTK 非依存の純粋関数。
+///
+/// `notify::is-loading`(`is_loading`)と `notify::estimated-load-progress`
+/// (`progress`、0.0〜1.0)を文字列化する。§12「読み込み中のみ `[42%]` 等を表示」に
+/// 従い、読み込み中は `[NN%]`(四捨五入)を、非読み込み時は空文字を返す。実際の
+/// ラベル更新は呼び出し側(`window`)が notify シグナルで駆動する。
+pub fn format_load_progress(is_loading: bool, progress: f64) -> String {
+    if !is_loading {
+        return String::new();
+    }
+    format!("[{}%]", (progress * 100.0).round() as u32)
 }
 
 /// `:open <input>` の入力を解釈して遷移先 URL を返す(`None` = 空入力)。
@@ -139,7 +153,7 @@ fn percent_encode(s: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{app_subdir, initial_uri, parse_open_input};
+    use super::{app_subdir, format_load_progress, initial_uri, parse_open_input};
     use std::path::{Path, PathBuf};
 
     // --- 規則 1: 前処理(trim・空入力)---
@@ -263,6 +277,18 @@ mod tests {
         assert_eq!(
             parse_open_input("HTTPS://example.com"),
             Some("HTTPS://example.com".to_string())
+        );
+    }
+
+    #[test]
+    fn p07_leading_digit_before_colon_is_not_scheme() {
+        // 規則 3 のスキームは英字始まり(§11: `^[a-zA-Z]...`)。先頭が数字なら ':' を
+        // 含んでもスキーム扱いしない(has_scheme の「英字始まり」判定を固定する)。`.` を
+        // 含まないため規則 5(検索)へ落ちる。P-25 は数字始まりでも `:` 無しのため、この
+        // ':' 前の英字始まり判定は別途固定する必要がある(cargo-mutants で顕在化)。
+        assert_eq!(
+            parse_open_input("1:2"),
+            Some("https://duckduckgo.com/?q=1%3A2".to_string())
         );
     }
 
@@ -404,6 +430,38 @@ mod tests {
     }
 
     // --- §8.2: NetworkSession の data/cache ディレクトリ算出 ---
+
+    // --- §12: ステータスバーの読み込み状態表示 ---
+
+    #[test]
+    fn s12_not_loading_is_empty() {
+        // §12: 読み込み中のみ表示。非読み込み時は progress 値に依らず空。
+        assert_eq!(format_load_progress(false, 0.5), "");
+    }
+
+    #[test]
+    fn s12_loading_formats_percent() {
+        // 0.42 → [42%](四捨五入)。
+        assert_eq!(format_load_progress(true, 0.42), "[42%]");
+    }
+
+    #[test]
+    fn s12_loading_zero_percent() {
+        assert_eq!(format_load_progress(true, 0.0), "[0%]");
+    }
+
+    #[test]
+    fn s12_loading_full() {
+        assert_eq!(format_load_progress(true, 1.0), "[100%]");
+    }
+
+    #[test]
+    fn s12_loading_rounds_half_up() {
+        // §12 doc の「四捨五入」を固定する。truncate 実装なら 99% になり落ちる値を選ぶ
+        // (CLAUDE.md 規約 4: coverage は分岐網羅であって挙動網羅ではない)。
+        // 0.425 は f64 で 42.4999… のため四捨五入でも 42% になり probe に使えない点に注意。
+        assert_eq!(format_load_progress(true, 0.999), "[100%]");
+    }
 
     #[test]
     fn s82_app_subdir_appends_owl_to_xdg_base() {

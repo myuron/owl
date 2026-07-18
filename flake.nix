@@ -63,6 +63,8 @@
           rustToolchain
 	  pkgs.just
 	  pkgs.cargo-llvm-cov
+	  # CLAUDE.md 規約 4: coverage が見ない「分岐内の挙動」の未検証を機械検出する。
+	  pkgs.cargo-mutants
 	  # design.md §2・§15: GTK4 / WebKitGTK 6 のビルドに要るネイティブ依存。
 	  pkgs.pkg-config
 	  pkgs.gtk4
