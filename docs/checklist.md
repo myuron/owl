@@ -205,3 +205,4 @@ insert 自動移行は M6。
 |---|---|---|---|
 | M4-30 | `f` を押す | 現状 **inert**: 何も起きず Normal のまま(M5 で本結線) | (実施予定) |
 | M4-31 | command モードで入力中に `j`/`k` 等 | ページへスクロールせず Entry へ文字入力される(§7.2: Command は全キー Proceed で Entry が処理) | (実施予定) |
+| M4-32 | command モード中に WebView 本体をマウスでクリック | Entry のフォーカスは外れるがモードは Command のまま(インジケータは `-- COMMAND --` 継続、キーはページへ Proceed)。Entry をクリックし直すか、`Esc`/`Enter` で復帰できる。**バグではなく既知の制限**(M3-51/52 と同種、MVP 許容)。将来直すなら Entry の focus-leave で `leave_command` | (実施予定) |

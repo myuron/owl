@@ -174,14 +174,13 @@ fn install_command_entry(
         let state = state.clone();
         let web_view = web_view.clone();
         let mode_label = mode_label.clone();
+        let entry = command_entry.clone();
         let esc = EventControllerKey::new();
-        esc.connect_key_pressed(move |controller, keyval, _keycode, _mods| {
+        esc.connect_key_pressed(move |_controller, keyval, _keycode, _mods| {
             if keyval != gdk::Key::Escape {
                 return glib::Propagation::Proceed;
             }
-            if let Some(entry) = controller.widget().and_downcast::<Entry>() {
-                leave_command(&state, &entry, &web_view, &mode_label);
-            }
+            leave_command(&state, &entry, &web_view, &mode_label);
             glib::Propagation::Stop
         });
         command_entry.add_controller(esc);

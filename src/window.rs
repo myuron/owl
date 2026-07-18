@@ -113,6 +113,10 @@ fn build_status_bar(web_view: &WebView) -> (gtk4::Box, Label, Label) {
     let message = Label::new(None);
     message.add_css_class("owl-message");
     message.set_halign(Align::Start);
+    // 長大な未知コマンド名でもラベルの自然幅がウィンドウ最小幅を押し広げないよう省略する
+    // (URL/タイトルと同じ扱い)。
+    message.set_ellipsize(EllipsizeMode::End);
+    message.set_max_width_chars(40);
 
     // URL(§12: notify::uri)。余白を占め、長い URL は末尾省略する。
     let url = Label::new(web_view.uri().as_deref());
