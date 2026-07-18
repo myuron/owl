@@ -69,7 +69,14 @@
 	  pkgs.pkg-config
 	  pkgs.gtk4
 	  pkgs.webkitgtk_6_0
+	  # design.md §15: GIO の TLS バックエンド。HTTPS(検索含む)に必須。
+	  pkgs.glib-networking
         ];
+        # ホスト環境に依存せず devShell 単体で TLS を効かせる。既存の GIO_EXTRA_MODULES
+        # (dconf/gvfs 等)を壊さないよう前置で追記する(design.md §15)。
+        shellHook = ''
+          export GIO_EXTRA_MODULES="${pkgs.glib-networking}/lib/gio/modules''${GIO_EXTRA_MODULES:+:$GIO_EXTRA_MODULES}"
+        '';
       };
       packages.default = pkgs.callPackage ./nix/rust.nix { };
       apps = {
