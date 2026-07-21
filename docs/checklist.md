@@ -304,7 +304,7 @@ GTK/WebKit シグナル結線(`webview.rs`・`window.rs`)の実挙動を `nix bu
 
 | ID | 手順 | 期待結果 | 結果 |
 |---|---|---|---|
-| M7-01 | `just ci`(fmt-check → lint → coverage → mutants → build) | 全ステップ緑。coverage は command.rs/keys.rs/hints.rs region/line 100% 維持(新 `error_page_html`/`download_blocked_message`/`uri_basename`/`html_escape` を含む)。mutants survivor ゼロ(124 mutants: 108 caught・16 unviable)。`webview.rs`/`window.rs` は GTK 結線のため coverage 除外 | ✅ fmt-check / clippy(-D warnings)/ coverage(command.rs 100%・keys.rs 100%・hints.rs 100%)/ mutants(survivor 0)/ nix build 緑。加えて空の `XDG_DATA_HOME` で `about:blank` 起動 → panic/CRITICAL なし・`owl/cookies.sqlite` 生成を確認(§8.2 の永続化が実挙動で有効) |
+| M7-01 | `just ci`(fmt-check → lint → coverage → mutants → build) | 全ステップ緑。coverage は command.rs/keys.rs/hints.rs region/line 100% 維持(新 `error_page_html`/`download_blocked_message`/`uri_basename`/`html_escape`/`popup_navigation_uri` を含む)。mutants survivor ゼロ(129 mutants: 113 caught・16 unviable)。`webview.rs`/`window.rs` は GTK 結線のため coverage 除外 | ✅ fmt-check / clippy(-D warnings)/ coverage(command.rs 100%・keys.rs 100%・hints.rs 100%)/ mutants(survivor 0)/ nix build 緑。加えて空の `XDG_DATA_HOME` で `about:blank` 起動 → panic/CRITICAL なし・`owl/cookies.sqlite` 生成を確認(§8.2 の永続化が実挙動で有効) |
 
 ### M7.2 Cookie・データ永続化(design §8.2)
 
@@ -333,12 +333,12 @@ GTK/WebKit シグナル結線(`webview.rs`・`window.rs`)の実挙動を `nix bu
 
 | ID | 手順 | 期待結果 | 結果 |
 |---|---|---|---|
-| M7-30 | `target="_blank"` のリンク、または `window.open('https://example.com')` を実行するページ | 新規ウィンドウ/タブを作らず、現在の WebView で当該 URL へ遷移する(`connect_create` → `load_uri` → `None`) | (実施予定) |
-| M7-31 | URI を伴わない `window.open()`(空) | 何も起きない(新規ウィンドウを開かせないことが目的。URI が無い要求は握り潰す)。**バグではなく仕様** | (実施予定) |
+| M7-30 | `target="_blank"` のリンク、または `window.open('https://example.com')` を実行するページ | 新規ウィンドウ/タブを作らず、現在の WebView で当該 URL へ遷移する(`connect_create` → `popup_navigation_uri` → `load_uri` → `None`) | (実施予定) |
+| M7-31 | URI を伴わない `window.open()`(空)、または `window.open('javascript:alert(1)')`/`window.open('data:text/html,...')` | 何も起きない(新規ウィンドウを開かせないことが目的。URI が無い/`javascript:`/`data:` の要求は握り潰す。§8.4・規約 6)。**バグではなく仕様** | (実施予定) |
 
 ### M7.6 ダウンロードキャンセル(design §8.5)
 
 | ID | 手順 | 期待結果 | 結果 |
 |---|---|---|---|
-| M7-32 | ダウンロードが始まるリンク(例: 任意のファイル直リンク)をクリック | ダウンロードは即時キャンセルされ(`Download::cancel`)、ステータスバーのメッセージ欄に `download blocked: <ファイル名>` が数秒(`DOWNLOAD_MESSAGE_SECS`=4 秒)表示される。ファイルは保存されない | (実施予定) |
-| M7-33 | (既知の制限)ファイル名は URI の最後のパスセグメント由来 | `Content-Disposition` の suggested filename ではなく URI basename を表示する(download-started 時点で応答が未着のため)。末尾スラッシュ等でセグメントが空なら URI 全体を表示。ブロック目的は満たすため **MVP 許容**。また、ダウンロード化されたトップレベル遷移で `load-failed` が一瞬エラーページを出す場合がある(`NetworkError::Cancelled` 以外の中断)— MVP 許容 | (実施予定) |
+| M7-32 | ダウンロードが始まるリンク(例: 任意のファイル直リンク)をクリック | ダウンロードは即時キャンセルされ(`Download::cancel`)、**現在ページは表示されたまま**、ステータスバーのメッセージ欄に `download blocked: <ファイル名>` が数秒(`DOWNLOAD_MESSAGE_SECS`=4 秒)表示される。ファイルは保存されない。トップレベル遷移がダウンロード化した場合も `load-failed`(`PolicyError::FrameLoadInterruptedByPolicyChange`)を除外するためエラーページに置換されない | (実施予定) |
+| M7-33 | (既知の制限)ファイル名は URI の最後のパスセグメント由来 | `Content-Disposition` の suggested filename ではなく URI basename を表示する(download-started 時点で応答が未着のため)。末尾スラッシュ等でセグメントが空なら URI 全体を表示。`download.request()` が無い/空 URI では `download blocked: `(ファイル名空)になりうる。**MVP 許容**(メッセージ欄は ellipsize 済み)。**同一ファイル名**のブロックを 4 秒以内に 2 回行うと 1 回目のタイマーが 2 回目の表示を早期に消すことがある(Low L-2、MVP 許容) | (実施予定) |

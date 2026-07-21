@@ -127,6 +127,18 @@ URL/種別を素の HTML に埋めると XSS になりうる。CLAUDE.md 規約 
 | ERR-02 | kind=`<script>&"'`(HTML 特殊文字) | `&lt;script&gt;&amp;&quot;&#39;` を含み、素の `<script>` を**含まない**(全エスケープ分岐を固定) |
 | ERR-03 | url=`https://a/?q=1&r=2`(`&` を含む実 URL) | `q=1&amp;r=2` を含む(`&` がエスケープされ属性/実体参照が壊れない) |
 
+`popup_navigation_uri(uri) -> Option<&str>`(§8.4): `window.open`/`target="_blank"` の要求 URI の
+うちトップフレームへ遷移してよいものだけを返す。要求 URI はページ(信頼境界の外)が握るため、
+`javascript:`/`data:` を拒否する(規約 6)。スキーム判定は大文字小文字を区別しない(RFC 3986)。
+
+| ID | 入力 | 期待結果 |
+|---|---|---|
+| POP-01 | `https://example.com/x`(通常の遷移先) | `Some("https://example.com/x")`(そのまま許可) |
+| POP-02 | `javascript:alert(1)` | `None`(トップフレームへ遷移させない。UXSS 防止) |
+| POP-03 | `data:text/html,<script>alert(1)</script>` | `None`(拒否) |
+| POP-04 | `JavaScript:…`/`DATA:…`(大文字混在) | `None`(スキームは大文字小文字を区別しない。`eq` に変えると落ちる) |
+| POP-05 | `https://data.example.com`・`js`(短い入力) | `Some(...)`(接頭辞ではなくスキームで判定、境界で panic しない) |
+
 ## 2. キーシーケンスの状態遷移(keys.rs)
 
 §7.3: Normal モードで `g`・`y` は `pending_key` に記録。次のキーで解決する。GTK イベントに依存しない純粋な状態遷移関数として切り出してテストする。

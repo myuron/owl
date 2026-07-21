@@ -14,7 +14,7 @@
 use gtk4::{Label, glib};
 use webkit6::prelude::*;
 use webkit6::{
-    CookiePersistentStorage, NetworkError, NetworkSession, Settings, TLSErrorsPolicy,
+    CookiePersistentStorage, NetworkError, NetworkSession, PolicyError, Settings, TLSErrorsPolicy,
     UserContentInjectedFrames, UserContentManager, UserScript, UserScriptInjectionTime, WebView,
 };
 
@@ -106,11 +106,14 @@ pub fn build(uri: &str) -> WebView {
 ///
 /// `target="_blank"` や `window.open` で発火する `create` を捕まえ、要求 URI を現在の WebView で
 /// `load_uri` してから `None` を返す(新規ウィンドウを作らせない)。URI が取れない要求(空の
-/// `window.open()` 等)は何もせず握り潰す(新規ウィンドウを開かせないことが目的)。
+/// `window.open()` 等)や、トップフレームへ遷移させてはいけないスキーム(`javascript:`/`data:`)は
+/// 何もせず握り潰す(規約 6: 要求 URI はページが握るため検証する。`command::popup_navigation_uri`)。
 fn install_popup_suppression(web_view: &WebView) {
     web_view.connect_create(|wv, navigation_action| {
-        if let Some(uri) = navigation_action.request().and_then(|r| r.uri()) {
-            wv.load_uri(&uri);
+        if let Some(uri) = navigation_action.request().and_then(|r| r.uri())
+            && let Some(safe) = command::popup_navigation_uri(&uri)
+        {
+            wv.load_uri(safe);
         }
         None
     });
@@ -122,11 +125,16 @@ fn install_popup_suppression(web_view: &WebView) {
 /// 表示する。エラーページからは `r`(§7.4 の `reload`)でそのまま復帰できる(§8.6)。エラー種別・
 /// URL の HTML エスケープは純粋関数側で済んでいる(§4・規約 6)。
 fn install_error_pages(web_view: &WebView) {
-    // 読み込み失敗(§8.6)。ただし Esc 中断・ダウンロード化・リダイレクト等の**キャンセル**は
-    // 失敗ではないためエラーページを出さず既定に委ねる(`false` を返す)。TLS 失敗はこの
-    // シグナルではなく `load-failed-with-tls-errors` 側へ回るため、ここでは扱わない。
+    // 読み込み失敗(§8.6)。ただし「失敗ではない中断」はエラーページを出さず既定に委ねる
+    // (`false` を返す)。TLS 失敗はこのシグナルではなく `load-failed-with-tls-errors` 側へ回る。
+    // - `NetworkError::Cancelled`: `Esc`/`stop_loading`・リダイレクト等の明示中断(§7.4)。
+    // - `PolicyError::FrameLoadInterruptedByPolicyChange`: トップ遷移がダウンロードへ転化した際の
+    //   中断。§8.5 で `Download::cancel` しメッセージ表示するので、**現在ページはそのまま残す**
+    //   (ここでエラーページに置換すると DL リンククリックだけで表示が壊れる)。
     web_view.connect_load_failed(|wv, _event, failing_uri, error| {
-        if error.matches(NetworkError::Cancelled) {
+        if error.matches(NetworkError::Cancelled)
+            || error.matches(PolicyError::FrameLoadInterruptedByPolicyChange)
+        {
             return false;
         }
         let html = command::error_page_html(&error.to_string(), failing_uri);
@@ -142,11 +150,16 @@ fn install_error_pages(web_view: &WebView) {
     });
 
     // WebProcess クラッシュ(§8.6)。現在の URI をオリジンにエラーページを出し、`r` の
-    // `reload()` で WebProcess を再 spawn できるようにする。URI 不明時は空にフォールバック。
+    // `reload()` で WebProcess を再 spawn できるようにする。URI 不明・空(about:blank 上での
+    // クラッシュ等)は content_uri を空にすると不正なので `about:blank` にフォールバックする。
     web_view.connect_web_process_terminated(|wv, _reason| {
-        let uri = wv.uri().unwrap_or_default();
-        let html = command::error_page_html("renderer crashed", &uri);
-        wv.load_alternate_html(&html, &uri, None);
+        let uri = wv.uri();
+        let uri = uri
+            .as_deref()
+            .filter(|u| !u.is_empty())
+            .unwrap_or("about:blank");
+        let html = command::error_page_html("renderer crashed", uri);
+        wv.load_alternate_html(&html, uri, None);
     });
 }
 

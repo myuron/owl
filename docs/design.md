@@ -183,6 +183,8 @@ Cookie は `network_session.cookie_manager().set_persistent_storage(path, Sqlite
 
 `WebView::connect_create`(`target="_blank"` / `window.open` で発火)で、`NavigationAction` から要求 URI を取り出して**現在の WebView で** `load_uri` し、`None` を返す(新規ウィンドウを作らせない)。
 
+要求 URI はページ(信頼境界の外)が握るため、トップフレームへ遷移させる前に検証する(規約 6)。`javascript:`/`data:` はトップフレーム遷移に使うと UXSS・フィッシングの温床になるため拒否し、何もしない(新規ウィンドウも開かせない)。判定は純粋関数 `command::popup_navigation_uri(&str) -> Option<&str>`(拒否スキームは `None`)に切り出し、大文字小文字を区別しないスキーム判定でユニットテストする(§14)。実際の `load_uri` は呼び出し側(`webview`)が行う。
+
 ### 8.5 ダウンロードのキャンセル
 
 `NetworkSession::connect_download_started` で `Download::cancel()` を即時に呼ぶ。黙って捨てず、ステータスバーに「download blocked: <ファイル名>」を数秒表示する。

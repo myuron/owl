@@ -226,6 +226,26 @@ fn uri_basename(uri: &str) -> &str {
     }
 }
 
+/// `window.open`/`target="_blank"` の要求 URI のうち、トップフレームへ遷移してよいものだけを
+/// 返す(設計書 §8.4)。GTK 非依存の純粋関数。
+///
+/// §8.4 は新規ウィンドウ要求を現在の WebView での `load_uri` に倒すが、要求 URI はページ(信頼
+/// 境界の外・クロスオリジン iframe 含む)が握るため、`javascript:`/`data:` をトップフレームの
+/// 遷移に使わせない(UXSS・フィッシングの温床。CLAUDE.md 規約 6: ページを信頼しない)。拒否
+/// スキームは `None` を返し、呼び出し側(`webview`)は何もしない(新規ウィンドウも開かせない)。
+/// スキーム判定は大文字小文字を区別しない(RFC 3986)。
+pub fn popup_navigation_uri(uri: &str) -> Option<&str> {
+    const BLOCKED_SCHEMES: [&str; 2] = ["javascript:", "data:"];
+    let bytes = uri.as_bytes();
+    for scheme in BLOCKED_SCHEMES {
+        let s = scheme.as_bytes();
+        if bytes.len() >= s.len() && bytes[..s.len()].eq_ignore_ascii_case(s) {
+            return None;
+        }
+    }
+    Some(uri)
+}
+
 /// 読み込み失敗・クラッシュ時に表示する最小エラーページ HTML を組む(設計書 §8.6)。
 /// GTK 非依存の純粋関数。
 ///
@@ -270,7 +290,7 @@ fn html_escape(s: &str) -> String {
 mod tests {
     use super::{
         Command, app_subdir, download_blocked_message, error_page_html, format_load_progress,
-        initial_uri, parse_command, parse_open_input,
+        initial_uri, parse_command, parse_open_input, popup_navigation_uri,
     };
     use std::path::{Path, PathBuf};
 
@@ -309,6 +329,52 @@ mod tests {
             download_blocked_message("https://example.com/"),
             "download blocked: https://example.com/"
         );
+    }
+
+    #[test]
+    fn pop01_allows_http_and_https() {
+        // §8.4: 通常の遷移先はそのまま許可する。
+        assert_eq!(
+            popup_navigation_uri("https://example.com/x"),
+            Some("https://example.com/x")
+        );
+        assert_eq!(
+            popup_navigation_uri("http://example.com"),
+            Some("http://example.com")
+        );
+    }
+
+    #[test]
+    fn pop02_rejects_javascript_scheme() {
+        // トップフレームへ javascript: を遷移させない(UXSS 防止。規約 6)。
+        assert_eq!(popup_navigation_uri("javascript:alert(1)"), None);
+    }
+
+    #[test]
+    fn pop03_rejects_data_scheme() {
+        assert_eq!(
+            popup_navigation_uri("data:text/html,<script>alert(1)</script>"),
+            None
+        );
+    }
+
+    #[test]
+    fn pop04_scheme_check_is_case_insensitive() {
+        // スキームは大文字小文字を区別しない(RFC 3986)。`eq` に変えると落ちる値。
+        assert_eq!(popup_navigation_uri("JavaScript:alert(1)"), None);
+        assert_eq!(popup_navigation_uri("DATA:text/html,x"), None);
+    }
+
+    #[test]
+    fn pop05_allows_non_blocked_scheme_prefixes() {
+        // `data`(コロンなし)で始まるホスト等は拒否しない(接頭辞ではなくスキームで判定)。
+        assert_eq!(
+            popup_navigation_uri("https://data.example.com"),
+            Some("https://data.example.com")
+        );
+        // ブロックスキームより短い入力でもスライス境界で panic せず素通す(長さガードの
+        // false 分岐を固定)。
+        assert_eq!(popup_navigation_uri("js"), Some("js"));
     }
 
     #[test]
