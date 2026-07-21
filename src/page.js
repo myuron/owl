@@ -238,10 +238,27 @@
   //
   // hint 確定の `.focus()`(§9)はスクリプト起因で mousedown を伴わないため、ここでは通知されない
   // (二重遷移しない)。hint 側は自前の `hint_result:input` で Insert へ遷移する。
+  //
+  // ユーザー起因 focus を送る(規約 6: 送信側で条件を満たすもののみ)。owl 側は Normal のときだけ受理する。
+  function notifyUserFocus() {
+    post({ type: "focus", editable: true });
+  }
   document.addEventListener(
     "mousedown",
-    function () {
+    function (e) {
       lastMouseDown = Date.now();
+      // `focusin` は focus が**移動したとき**だけ発火する。既に focus 済みの入力欄を再クリック
+      // (`autofocus` 済みの欄を初めてクリックする場合も含む)しても focusin は来ないため、この
+      // 経路を取りこぼさないよう mousedown 時に「クリック先が既に focus 済みの editable」なら即通知する。
+      var active = document.activeElement;
+      if (
+        active &&
+        isEditable(active) &&
+        e.target &&
+        (active === e.target || active.contains(e.target))
+      ) {
+        notifyUserFocus();
+      }
     },
     true,
   );
@@ -250,7 +267,7 @@
     function (e) {
       if (Date.now() - lastMouseDown > FOCUS_WINDOW_MS) return;
       if (!e.target || !isEditable(e.target)) return;
-      post({ type: "focus", editable: true });
+      notifyUserFocus();
     },
     true,
   );
