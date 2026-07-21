@@ -201,12 +201,208 @@ fn percent_encode(s: &str) -> String {
     out
 }
 
+/// ブロックしたダウンロードのステータス表示文字列を組む(設計書 §8.5)。GTK 非依存の純粋関数。
+///
+/// §8.5: ダウンロードは即時キャンセルし、黙って捨てず「download blocked: <ファイル名>」を
+/// 数秒表示する。ファイル名は URI の最後のパスセグメント(`uri_basename`)。実際のキャンセル
+/// (`Download::cancel`)とラベル更新・数秒後の消去は呼び出し側(`webview`)が担う。
+pub fn download_blocked_message(uri: &str) -> String {
+    format!("download blocked: {}", uri_basename(uri))
+}
+
+/// URI からダウンロードファイル名(最後のパスセグメント)を取り出す(設計書 §8.5)。
+///
+/// クエリ(`?`)・フラグメント(`#`)を除いたパス部の、最後の `/` 以降を返す。セグメントが
+/// 空(末尾スラッシュ等)なら URI 全体へフォールバックする(空表示を避ける)。
+fn uri_basename(uri: &str) -> &str {
+    // クエリ・フラグメントを落としたパス部。区切りが無ければ URI 全体がパス。
+    let path = match uri.split_once(['?', '#']) {
+        Some((before, _)) => before,
+        None => uri,
+    };
+    match path.rsplit_once('/') {
+        Some((_, seg)) if !seg.is_empty() => seg,
+        _ => uri,
+    }
+}
+
+/// `window.open`/`target="_blank"` の要求 URI のうち、トップフレームへ遷移してよいものだけを
+/// 返す(設計書 §8.4)。GTK 非依存の純粋関数。
+///
+/// §8.4 は新規ウィンドウ要求を現在の WebView での `load_uri` に倒すが、要求 URI はページ(信頼
+/// 境界の外・クロスオリジン iframe 含む)が握るため、`javascript:`/`data:` をトップフレームの
+/// 遷移に使わせない(UXSS・フィッシングの温床。CLAUDE.md 規約 6: ページを信頼しない)。拒否
+/// スキームは `None` を返し、呼び出し側(`webview`)は何もしない(新規ウィンドウも開かせない)。
+/// スキーム判定は大文字小文字を区別しない(RFC 3986)。
+pub fn popup_navigation_uri(uri: &str) -> Option<&str> {
+    const BLOCKED_SCHEMES: [&str; 2] = ["javascript:", "data:"];
+    let bytes = uri.as_bytes();
+    for scheme in BLOCKED_SCHEMES {
+        let s = scheme.as_bytes();
+        if bytes.len() >= s.len() && bytes[..s.len()].eq_ignore_ascii_case(s) {
+            return None;
+        }
+    }
+    Some(uri)
+}
+
+/// 読み込み失敗・クラッシュ時に表示する最小エラーページ HTML を組む(設計書 §8.6)。
+/// GTK 非依存の純粋関数。
+///
+/// エラー種別(`kind`)・対象 URL(`url`)・`r` でリロードの案内を含む(§8.6)。`load_alternate_html`
+/// は失敗 URI をオリジンとして描画するため、攻撃者が制御しうる `url`/`kind` を素の HTML に
+/// 埋めると XSS になる。両者を HTML エスケープしてから埋め込む(CLAUDE.md 規約 6 の信頼境界)。
+/// 実際の `load_alternate_html` 呼び出しは呼び出し側(`webview`)が担う。
+pub fn error_page_html(kind: &str, url: &str) -> String {
+    format!(
+        "<!DOCTYPE html>\n<html><head><meta charset=\"utf-8\"><title>owl: load error</title>\n\
+         <style>body{{font-family:monospace;background:#1e1e1e;color:#d4d4d4;\
+         margin:0;padding:2rem;}}h1{{font-size:1.2rem;color:#e5a03c;}}\
+         .url{{word-break:break-all;color:#9cdcfe;}}kbd{{background:#333;\
+         padding:0 .3em;border-radius:3px;}}</style></head>\n\
+         <body><h1>{}</h1><p class=\"url\">{}</p>\
+         <p>press <kbd>r</kbd> to reload</p></body></html>",
+        html_escape(kind),
+        html_escape(url),
+    )
+}
+
+/// HTML テキスト/属性文脈で危険な文字をエスケープする(設計書 §8.6)。
+///
+/// `& < > " '` を実体参照へ置き換える。エラーページに攻撃者制御の URL/種別を埋める際の
+/// XSS を防ぐ(CLAUDE.md 規約 6)。
+fn html_escape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            '\'' => out.push_str("&#39;"),
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        Command, app_subdir, format_load_progress, initial_uri, parse_command, parse_open_input,
+        Command, app_subdir, download_blocked_message, error_page_html, format_load_progress,
+        initial_uri, parse_command, parse_open_input, popup_navigation_uri,
     };
     use std::path::{Path, PathBuf};
+
+    // --- 1.8 M7 堅牢化の純粋ロジック(§8.5・§8.6)---
+
+    #[test]
+    fn dl01_message_uses_last_path_segment() {
+        // §8.5: ファイル名は URI の最後のパスセグメント。
+        assert_eq!(
+            download_blocked_message("https://example.com/files/report.pdf"),
+            "download blocked: report.pdf"
+        );
+    }
+
+    #[test]
+    fn dl02_message_strips_query() {
+        // クエリ文字列はファイル名に含めない(truncate せず `?` 手前で切る)。
+        assert_eq!(
+            download_blocked_message("https://example.com/a/report.pdf?x=1&y=2"),
+            "download blocked: report.pdf"
+        );
+    }
+
+    #[test]
+    fn dl03_message_strips_fragment() {
+        assert_eq!(
+            download_blocked_message("https://example.com/a/archive.zip#frag"),
+            "download blocked: archive.zip"
+        );
+    }
+
+    #[test]
+    fn dl04_message_falls_back_to_uri_when_no_filename() {
+        // 末尾スラッシュでセグメントが空 → URI 全体へフォールバック(空表示にしない)。
+        assert_eq!(
+            download_blocked_message("https://example.com/"),
+            "download blocked: https://example.com/"
+        );
+    }
+
+    #[test]
+    fn pop01_allows_http_and_https() {
+        // §8.4: 通常の遷移先はそのまま許可する。
+        assert_eq!(
+            popup_navigation_uri("https://example.com/x"),
+            Some("https://example.com/x")
+        );
+        assert_eq!(
+            popup_navigation_uri("http://example.com"),
+            Some("http://example.com")
+        );
+    }
+
+    #[test]
+    fn pop02_rejects_javascript_scheme() {
+        // トップフレームへ javascript: を遷移させない(UXSS 防止。規約 6)。
+        assert_eq!(popup_navigation_uri("javascript:alert(1)"), None);
+    }
+
+    #[test]
+    fn pop03_rejects_data_scheme() {
+        assert_eq!(
+            popup_navigation_uri("data:text/html,<script>alert(1)</script>"),
+            None
+        );
+    }
+
+    #[test]
+    fn pop04_scheme_check_is_case_insensitive() {
+        // スキームは大文字小文字を区別しない(RFC 3986)。`eq` に変えると落ちる値。
+        assert_eq!(popup_navigation_uri("JavaScript:alert(1)"), None);
+        assert_eq!(popup_navigation_uri("DATA:text/html,x"), None);
+    }
+
+    #[test]
+    fn pop05_allows_non_blocked_scheme_prefixes() {
+        // `data`(コロンなし)で始まるホスト等は拒否しない(接頭辞ではなくスキームで判定)。
+        assert_eq!(
+            popup_navigation_uri("https://data.example.com"),
+            Some("https://data.example.com")
+        );
+        // ブロックスキームより短い入力でもスライス境界で panic せず素通す(長さガードの
+        // false 分岐を固定)。
+        assert_eq!(popup_navigation_uri("js"), Some("js"));
+    }
+
+    #[test]
+    fn err01_contains_kind_url_and_reload_hint() {
+        // §8.6: エラー種別・対象 URL・リロード案内を含む。
+        let html = error_page_html("Could not connect", "https://x.test/");
+        assert!(html.contains("Could not connect"), "got: {html}");
+        assert!(html.contains("https://x.test/"), "got: {html}");
+        assert!(html.contains("reload"), "got: {html}");
+    }
+
+    #[test]
+    fn err02_escapes_all_html_specials() {
+        // 全エスケープ分岐(& < > " ')を固定する。素の `<script>` が残ると XSS(規約 6)。
+        let html = error_page_html("<script>&\"'", "u");
+        assert!(
+            html.contains("&lt;script&gt;&amp;&quot;&#39;"),
+            "got: {html}"
+        );
+        assert!(!html.contains("<script>"), "got: {html}");
+    }
+
+    #[test]
+    fn err03_escapes_ampersand_in_url() {
+        // 実 URL によくある `&` がエスケープされ、実体参照を壊さない。
+        let html = error_page_html("x", "https://a/?q=1&r=2");
+        assert!(html.contains("q=1&amp;r=2"), "got: {html}");
+    }
 
     // --- 1.7 parse_command(command モードのコマンドディスパッチ、§11)---
 

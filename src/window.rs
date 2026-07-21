@@ -49,6 +49,10 @@ pub fn build(app: &Application, uri: &str) {
     // メッセージ(エラー)のラベルは M4 のキー結線(input)から更新するため受け取る。
     let (status_bar, mode_label, message_label) = build_status_bar(&web_view);
 
+    // §8.5: ダウンロードブロックの表示はメッセージ欄を再利用する。message_label が揃った
+    // ここで NetworkSession の download-started を結線する(§4: 副作用側の後付け結線)。
+    webview::install_download_guard(&web_view, &message_label);
+
     // §5-3: コマンドライン。command モードでのみ表示する(初期は非表示)。表示・実行・
     // キャンセルの結線は input(§11)が担う。
     let command_entry = build_command_line();

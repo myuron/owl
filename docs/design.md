@@ -70,7 +70,7 @@ src/
 ├── webview.rs     // WebView 生成と設定: NetworkSession、永続化、各種シグナル(TLS/クラッシュ/ポップアップ/ダウンロード)
 ├── keys.rs        // 純粋なキー解決状態機械: Mode/Action、resolve_key(モード別解釈・gg/yy シーケンス)、set_mode、classify_input/scroll_script/mode_indicator。GTK 非依存でユニットテスト対象(§14)
 ├── input.rs       // キー入力の GTK 結線(M3・M4): EventControllerKey(capture phase)を取り付け、keys で判定した Action を実行(スクロール JS・ナビゲーション API・クリップボード・モード遷移の副作用)。command モードは Entry の表示・実行(parse_command)・キャンセルもここ(§11)
-├── command.rs     // 純粋なコマンド/起動ロジック: コマンドディスパッチ parse_command(§11)、:open のパース parse_open_input(§11)、initial_uri/app_subdir/format_load_progress。GTK 非依存でユニットテスト対象
+├── command.rs     // 純粋なコマンド/起動ロジック: コマンドディスパッチ parse_command(§11)、:open のパース parse_open_input(§11)、initial_uri/app_subdir/format_load_progress、および M7 堅牢化の文字列組み立て error_page_html(§8.6)/download_blocked_message(§8.5)。GTK 非依存でユニットテスト対象
 ├── hints.rs       // hint モード: JS 側との連携、ラベル入力の転送(M5)
 └── page.js        // ページへ注入する UserScript(ヒント描画、focus 検知)— include_str! で埋め込む
 ```
@@ -182,6 +182,8 @@ Cookie は `network_session.cookie_manager().set_persistent_storage(path, Sqlite
 ### 8.4 新規ウィンドウ抑制
 
 `WebView::connect_create`(`target="_blank"` / `window.open` で発火)で、`NavigationAction` から要求 URI を取り出して**現在の WebView で** `load_uri` し、`None` を返す(新規ウィンドウを作らせない)。
+
+要求 URI はページ(信頼境界の外)が握るため、トップフレームへ遷移させる前に検証する(規約 6)。`javascript:`/`data:` はトップフレーム遷移に使うと UXSS・フィッシングの温床になるため拒否し、何もしない(新規ウィンドウも開かせない)。判定は純粋関数 `command::popup_navigation_uri(&str) -> Option<&str>`(拒否スキームは `None`)に切り出し、大文字小文字を区別しないスキーム判定でユニットテストする(§14)。実際の `load_uri` は呼び出し側(`webview`)が行う。
 
 ### 8.5 ダウンロードのキャンセル
 

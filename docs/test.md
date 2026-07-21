@@ -98,6 +98,47 @@ URL に解決する。エラーメッセージは呼び出し側(ステータス
 | CMD-10 | `:quit now`(quit に余分な引数) | `Command::Quit`(quit は引数を無視) |
 | CMD-11 | `:  quit  `(前後空白) | `Command::Quit`(先頭 `:` 除去後に trim してから分割) |
 
+### 1.8 M7 堅牢化の純粋ロジック(command.rs)— §8.5・§8.6
+
+WebView 統合(§8)の堅牢化のうち GTK 非依存な文字列組み立てを純粋関数に切り出す。実際の
+シグナル結線(`load_alternate_html`・`Download::cancel`・ステータスバー更新)は呼び出し側
+(`webview`/`window`)が担い手動確認する(§14・checklist M7)。エスケープ・整形は「分岐は
+通るが挙動が誤る」型なので、誤実装で落ちる値を選んでアサートする(CLAUDE.md 規約 4)。
+
+`download_blocked_message(uri) -> String`(§8.5): ブロックしたダウンロードのステータス表示
+`download blocked: <ファイル名>`。ファイル名は URI の最後のパスセグメント(クエリ `?`・
+フラグメント `#` を除く)。セグメントが空なら URI 全体にフォールバックする。
+
+| ID | 入力 | 期待結果 |
+|---|---|---|
+| DL-01 | `https://example.com/files/report.pdf` | `download blocked: report.pdf`(最後のセグメント) |
+| DL-02 | `https://example.com/a/report.pdf?x=1&y=2` | `download blocked: report.pdf`(クエリを除く) |
+| DL-03 | `https://example.com/a/archive.zip#frag` | `download blocked: archive.zip`(フラグメントを除く) |
+| DL-04 | `https://example.com/`(末尾スラッシュ・ファイル名なし) | `download blocked: https://example.com/`(空セグメント → URI 全体へフォールバック) |
+
+`error_page_html(kind, url) -> String`(§8.6): 読み込み失敗・クラッシュ時の最小エラーページ。
+エラー種別(`kind`)・対象 URL(`url`)・`r` でリロードの案内を含む。`kind`/`url` は HTML
+エスケープする(`load_alternate_html` は失敗 URI をオリジンとして描画するため、攻撃者制御の
+URL/種別を素の HTML に埋めると XSS になりうる。CLAUDE.md 規約 6 の信頼境界)。
+
+| ID | 入力 | 期待結果 |
+|---|---|---|
+| ERR-01 | kind=`Could not connect`, url=`https://x.test/` | 両文字列とリロード案内(`reload`)を含む |
+| ERR-02 | kind=`<script>&"'`(HTML 特殊文字) | `&lt;script&gt;&amp;&quot;&#39;` を含み、素の `<script>` を**含まない**(全エスケープ分岐を固定) |
+| ERR-03 | url=`https://a/?q=1&r=2`(`&` を含む実 URL) | `q=1&amp;r=2` を含む(`&` がエスケープされ属性/実体参照が壊れない) |
+
+`popup_navigation_uri(uri) -> Option<&str>`(§8.4): `window.open`/`target="_blank"` の要求 URI の
+うちトップフレームへ遷移してよいものだけを返す。要求 URI はページ(信頼境界の外)が握るため、
+`javascript:`/`data:` を拒否する(規約 6)。スキーム判定は大文字小文字を区別しない(RFC 3986)。
+
+| ID | 入力 | 期待結果 |
+|---|---|---|
+| POP-01 | `https://example.com/x`(通常の遷移先) | `Some("https://example.com/x")`(そのまま許可) |
+| POP-02 | `javascript:alert(1)` | `None`(トップフレームへ遷移させない。UXSS 防止) |
+| POP-03 | `data:text/html,<script>alert(1)</script>` | `None`(拒否) |
+| POP-04 | `JavaScript:…`/`DATA:…`(大文字混在) | `None`(スキームは大文字小文字を区別しない。`eq` に変えると落ちる) |
+| POP-05 | `https://data.example.com`・`js`(短い入力) | `Some(...)`(接頭辞ではなくスキームで判定、境界で panic しない) |
+
 ## 2. キーシーケンスの状態遷移(keys.rs)
 
 §7.3: Normal モードで `g`・`y` は `pending_key` に記録。次のキーで解決する。GTK イベントに依存しない純粋な状態遷移関数として切り出してテストする。

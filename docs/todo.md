@@ -482,6 +482,70 @@ M6 が追加するのは **マウスクリック経由の focus 検知**(§10: p
 
 ---
 
+## サイクル 9: M7 堅牢化
+
+design.md §16 のマイルストーン **M7**「堅牢化」を実装タスクへ展開する。ゴールは「Cookie 永続化・
+TLS Fail・新規ウィンドウ抑制・ダウンロードキャンセル・エラーページ/クラッシュ復帰」(§8.2〜8.6)。
+M1 3-3 で §8 の全シグナル/API はコンパイルレベル存在確認済み(§17 解消済み)なので API 存在確認
+サイクルは不要。
+
+**スコープ境界:** M1 で最小結線した永続 `NetworkSession`(§8.2 の data/cache ディレクトリ)へ、
+Cookie の SQLite 永続化(§8.2)・TLS Fail ポリシー(§8.3)を足す。`connect_create`(§8.4)・
+`connect_download_started`(§8.5)・`connect_load_failed`/`load-failed-with-tls-errors`/
+`web-process-terminated`(§8.6)を本結線する。TLS 例外許可 UI は作らない(要求 3.1)。設定
+(`enable_developer_extras` 以外)は WebKit 既定のまま(§8.7)。次は M8 dogfooding。
+
+**方針:** 純粋ロジック(`command::{error_page_html, download_blocked_message}`)と GTK/WebKit 結線
+(`webview`・`window`)を分離(§4・§14)。純粋部は TDD + 100% coverage + mutants ゲート、シグナル
+結線部は手動確認(checklist M7)。
+
+### 9-A. 純粋ロジックの実装(TDD、§8.5・§8.6)
+
+- [x] `docs/test.md §1.8` に新 ID(DL-01〜04・ERR-01〜03)を追記(DL メッセージ・エラーページ HTML)
+- [x] **Red**: 未実装の `command::{download_blocked_message, error_page_html}` を参照する `dl01_*`〜
+      `dl04_*`・`err01_*`〜`err03_*` を書き、コンパイルエラーを確認。相異なる分岐(URI basename の
+      クエリ/フラグメント除去・空セグメントのフォールバック、HTML 全エスケープ分岐)を厳密に固定
+      (規約 2・4: 素の `<script>` が残ると XSS になる値・truncate と round を分ける値を選ぶ)
+- [x] **Green**: `command.rs` に `download_blocked_message`(`uri_basename` で最後のパスセグメント抽出)・
+      `error_page_html`(`html_escape` で `& < > " '` を実体参照化)を実装。モジュール doc を M7 用途へ拡張
+- [x] **Refactor**: `just coverage`(command/keys/hints region・line 100% 維持)・`just mutants`
+      (survivor 0)・`cargo clippy`(-D warnings)/`cargo fmt --check` を通す
+- [x] **/review 対応(M-2)**: `popup_navigation_uri`(§8.4、`javascript:`/`data:` を拒否する信頼境界検証、
+      規約 6)を TDD 追加(test.md §1.8 POP-01〜05)。coverage/mutants 再緑・design §8.4 を更新
+
+### 9-B. GTK/WebKit 結線(TDD 対象外、design §14。手動確認 = checklist)
+
+- [x] `src/webview.rs`: `build` に §8.2 Cookie 永続化(`cookie_manager().set_persistent_storage(
+      data_dir/cookies.sqlite, Sqlite)`)・§8.3 TLS Fail(`set_tls_errors_policy(Fail)`)を追加。
+      `install_popup_suppression`(§8.4 `connect_create` → `popup_navigation_uri` で検証 → 現 WebView で
+      `load_uri` → `None`)・`install_error_pages`(§8.6 `connect_load_failed`〔`NetworkError::Cancelled`
+      と `PolicyError::FrameLoadInterruptedByPolicyChange`〔= DL 化した遷移〕を除外〕/
+      `connect_load_failed_with_tls_errors`〔戻り値 bool〕/`connect_web_process_terminated`〔URI 空は
+      `about:blank` フォールバック〕 → `error_page_html` を `load_alternate_html`)を `load_uri` 前に結線
+- [x] `src/webview.rs`: `install_download_guard`(§8.5)を追加。`network_session()` の
+      `connect_download_started` で `Download::cancel()` → `download_blocked_message` をメッセージ欄へ。
+      `DOWNLOAD_MESSAGE_SECS`(4 秒)後に自動消去(表示中に別メッセージが入っていたら上書きしない)
+- [x] `src/window.rs`: `build` で message_label 確定後に `webview::install_download_guard` を呼ぶ
+      (§4: メッセージ欄が揃う位置で後付け結線)
+- [x] `docs/design.md §4` の `command.rs` 記述に `error_page_html`/`download_blocked_message` を追記
+- [x] `nix develop` 内で `cargo build`/`cargo clippy`(-D warnings)が通ることを確認。`nix build` 後、
+      空の `XDG_DATA_HOME` で `about:blank` 起動 → panic/CRITICAL なし・`owl/cookies.sqlite` 生成を確認
+      (§8.2 の永続化が実挙動で有効)
+
+### 9-手動確認(docs/checklist.md M7)
+
+- [x] `docs/checklist.md` に M7 セクション(M7-01〜M7-33)を追記する
+- [ ] `nix build` した `./result/bin/owl` で TLS Fail のエラーページ・読み込み失敗のエラーページ・
+      `r` リロード復帰・クラッシュ復帰・ポップアップ抑制・ダウンロードブロック表示・Cookie 永続化を
+      **目視確認**する(checklist M7、ユーザー環境で実施)
+
+### 9-完了条件
+
+- [x] `just ci`(fmt-check → lint → coverage → mutants → build)が緑になる
+- [ ] `nix build` した起動で M7 の堅牢化が期待どおり動く(checklist M7 の目視確認)
+
+---
+
 ## 完了条件(サイクル 1・2: 純粋ロジック)
 
 - [x] test.md の全 ID(P-01〜P-42、K-01〜K-41)に対応するテストが存在し、すべて green
