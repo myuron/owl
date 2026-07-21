@@ -246,3 +246,41 @@ iframe 内のヒントは MVP 非保証(§17、メインフレームのみ動作
 | M5-22 | `about:blank`(引数なし起動)で `f` | page.js が注入されていれば候補 0 件で即 Normal へ戻る(`hint_none`)。UserScript が注入されない特殊ページ等では一瞬 `-- HINT --` になり `hint_none` が来ず Hint に留まる → `Esc` で復帰(§9・§17 の既知の制限。**バグではない**) | (実施予定) |
 | M5-23 | クロスオリジン iframe を含むページで `f` | メインフレームの要素のみラベル表示される(iframe 内は MVP 非保証。§17)。**バグではなく既知の制限** | (実施予定) |
 | M5-24 | Insert 遷移後(M5-13)に `Esc` | Normal に戻り、入力欄の focus が外れる(M3 の Insert→Normal と同じ挙動) | (実施予定) |
+
+---
+
+## M6: insert モード自動移行
+
+ゴール(design §16.6・§10): 「ユーザー操作起因の focus でのみ Insert へ入り、`autofocus`・
+スクリプト起因では入らない」(要求 3.3)。M5 で hint 経由のテキスト入力欄選択(`hint_result:input`
+→ Insert)は実装済みなので、M6 は **マウスクリック経由の focus 検知**(§10: page.js が capture で
+mousedown を監視 → 直近 200ms 以内の focusin かつ editable なら `{"type":"focus"}` を送信 → owl は
+Normal のときのみ Insert へ)を追加する。純粋ロジック(`hints.rs` の `HintMessage::Focus` パース)は
+ユニットテスト済み(test.md §2.11 H-17)。ここでは page.js の focus 監視・script message handler 受信・
+モード遷移の実挙動を `nix build` した `./result/bin/owl` で手動確認する。
+
+**スコープ境界:** hint 経由の Insert 遷移(§9.2)は M5 で実装済み(M5-13 で確認)。クロスオリジン
+iframe 内のクリック focus は MVP 非保証(§17、メインフレームのみ)。
+
+### M6.1 ビルド
+
+| ID | 手順 | 期待結果 | 結果 |
+|---|---|---|---|
+| M6-01 | `just ci`(fmt-check → lint → coverage → mutants → build) | 全ステップ緑。coverage は command.rs/keys.rs/hints.rs region/line 100% 維持(新 `HintMessage::Focus` パースを含む)。mutants survivor ゼロ。`input.rs`/`page.js` は GTK/JS 結線のため coverage 対象外 | ✅ fmt-check / clippy(-D warnings)/ coverage(command.rs 432/432・keys.rs 550/550・hints.rs 192/192 region 100%)/ mutants(108 mutants: 92 caught・16 unviable、survivor 0)/ nix build 緑 |
+
+### M6.2 クリック focus → Insert(design §10)
+
+| ID | 手順 | 期待結果 | 結果 |
+|---|---|---|---|
+| M6-10 | テキスト入力欄(`input`/`textarea`/contenteditable)のあるページで、その入力欄をマウスでクリック | 自動で Insert へ遷移し、モードインジケータが `-- INSERT --`。以後キー入力が入力欄へ届く(§10 mousedown 相関の focusin) | (実施予定) |
+| M6-11 | `<input autofocus>` を含むページを開く | Normal のまま(インジケータ空)。`autofocus` の focusin は mousedown を伴わないため通知されない(§10・要求 3.3) | (実施予定) |
+| M6-12 | JS が読み込み時に `element.focus()` を呼ぶページを開く | Normal のまま。スクリプト起因 focus は通知されない(§10・要求 3.3) | (実施予定) |
+| M6-13 | M6-10 の Insert 遷移後に `Esc` | Normal に戻り、入力欄の focus が外れる(§6 Insert→Normal と同じ挙動) | (実施予定) |
+| M6-14 | リンクやボタン等 editable でない要素をマウスでクリック | Normal のまま。`isEditable` が false のため focus 通知を送らない(§10) | (実施予定) |
+
+### M6.3 スコープ外・既知の制限(design §10・§17)
+
+| ID | 手順 | 期待結果 | 結果 |
+|---|---|---|---|
+| M6-20 | (既知の制限)悪意あるページが `window.webkit.messageHandlers.owl.postMessage('{"type":"focus"}')` を Normal 中に偽装送信 | owl は Insert へ入りうる。mousedown 相関は信頼できないページ側(page.js)が判定するため Normal 中の偽装は防げない。`Esc` で必ず Normal へ復帰でき実害は限定的(§17 MVP 許容、hint 偽装と同種)。**バグではなく既知の制限** | (実施予定) |
+| M6-21 | Command/Hint/Insert モード中に focus メッセージ相当が届く状況(例: hint 表示中に入力欄をクリック) | Normal 以外では focus メッセージを受理しない(規約 6)。hint はモードを維持、他モードも遷移しない | (実施予定) |

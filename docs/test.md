@@ -240,10 +240,11 @@ page.js(JS 側)が担い**ユニットテスト対象外**(§3)。Rust 側の JS
 | H-10 | `parse_hint_message` | `{"type":"hint_result","target":"link"}` | `Link` |
 | H-11 | `parse_hint_message` | `{"type":"hint_result","target":"input"}` | `Input` |
 | H-12 | `parse_hint_message` | `{"type":"hint_none"}` | `None` |
-| H-13 | `parse_hint_message` | `{"type":"focus",…}`(未知 type) | `Ignore`(M6 の focus 等を前方互換で無視) |
+| H-13 | `parse_hint_message` | `{"type":"bogus"}`(未知 type) | `Ignore`(未知 type は前方互換で無視) |
 | H-14 | `parse_hint_message` | `hint_result` + 未知/欠落 target | `Ignore` |
 | H-15 | `parse_hint_message` | `{}`/非 JSON/空/コロン欠落/非文字列値/閉じ引用符欠落 | `Ignore`(全短絡パス) |
 | H-16 | `parse_hint_message` | `{ "type" : "hint_none" }` | `None`(`:` 前後の空白を許容) |
+| H-17 | `parse_hint_message` | `{"type":"focus","editable":true}` | `Focus`(§10 クリック focus → Insert。focus アームが Ignore に落ちないことを固定) |
 
 ## 3. テスト対象外(参考)
 

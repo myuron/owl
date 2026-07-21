@@ -10,9 +10,13 @@
 //! - JS → Rust(§9.2): script message handler `"owl"` が受け取る JSON 文字列を
 //!   `parse_hint_message` で `HintMessage` へ解釈する。
 
-/// JS → Rust の hint 結果メッセージ(設計書 §9.2)。呼び出し側がこれを見てモード遷移する
-/// (`Link`/`None` → Normal、`Input` → Insert)。`Ignore` は未知メッセージ(M6 の `focus` 等、
-/// あるいは壊れた JSON)を安全に読み飛ばすための前方互換アーム。
+/// script message handler `"owl"` が受け取る JS → Rust メッセージ(設計書 §9.2・§10)。
+///
+/// hint 結果(§9.2)に加え、M6 で §10 のクリック focus(`Focus`)も同じ `"owl"` ハンドラに
+/// 相乗りする。呼び出し側がこれを見てモード遷移する(`Link`/`None` → Normal、`Input`/`Focus`
+/// → Insert)。ただし遷移が許される現モードはメッセージ種別で異なる(hint 結果は Hint 中のみ、
+/// `Focus` は Normal 中のみ。検証は呼び出し側 `input.rs`)。`Ignore` は未知メッセージや壊れた
+/// JSON を安全に読み飛ばすための前方互換アーム。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HintMessage {
     /// `{"type":"hint_result","target":"link"}` — リンクをクリック実行済み。Normal へ。
@@ -21,6 +25,9 @@ pub enum HintMessage {
     Input,
     /// `{"type":"hint_none"}` — 候補 0 件(絞り込みで全滅含む)。Normal へ。
     None,
+    /// `{"type":"focus","editable":true}` — ユーザー起因のクリック focus(§10)。Normal → Insert。
+    /// page.js は mousedown 相関を満たし editable のときのみ送る(autofocus・スクリプト起因は送らない)。
+    Focus,
     /// 上記いずれにも当てはまらないメッセージ。無視する。
     Ignore,
 }
@@ -72,6 +79,9 @@ fn push_js_escaped(out: &mut String, ch: char) {
 pub fn parse_hint_message(input: &str) -> HintMessage {
     match json_string_field(input, "type") {
         Some("hint_none") => HintMessage::None,
+        // §10: クリック focus。page.js が editable のときのみ送るため、`editable` 値は再検証せず
+        // `type:focus` で受理する(送信側も owl が握る前提。§9.2 の既存方針と同じ)。
+        Some("focus") => HintMessage::Focus,
         Some("hint_result") => match json_string_field(input, "target") {
             Some("link") => HintMessage::Link,
             Some("input") => HintMessage::Input,
@@ -167,9 +177,9 @@ mod tests {
 
     #[test]
     fn h13_parse_unknown_type_is_ignore() {
-        // M6 の focus メッセージ等・未知 type は無視する(前方互換)。
+        // 真に未知の type は無視する(前方互換)。
         assert_eq!(
-            parse_hint_message("{\"type\":\"focus\",\"editable\":true}"),
+            parse_hint_message("{\"type\":\"bogus\"}"),
             HintMessage::Ignore
         );
     }
@@ -212,6 +222,16 @@ mod tests {
         assert_eq!(
             parse_hint_message("{ \"type\" : \"hint_none\" }"),
             HintMessage::None
+        );
+    }
+
+    #[test]
+    fn h17_parse_focus_is_focus() {
+        // §10: ユーザー起因のクリック focus。page.js は editable のときのみ送る。
+        // focus アームが誤って Ignore に落ちない(mutant を落とす)ことを固定する。
+        assert_eq!(
+            parse_hint_message("{\"type\":\"focus\",\"editable\":true}"),
+            HintMessage::Focus
         );
     }
 }

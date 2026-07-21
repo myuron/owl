@@ -320,18 +320,24 @@ fn leave_command(
     });
 }
 
-/// JS → Rust の hint 結果メッセージ(script message handler `"owl"`)を結線する(設計書 §9.2)。
+/// JS → Rust の `"owl"` script message handler を結線する(設計書 §9.2・§10)。
 ///
-/// page.js が確定/全滅時に送るメッセージを `hints::parse_hint_message` で解釈し、モードを
-/// 遷移させる(`Link`/`None` → Normal、`Input` → Insert)。JS 側は既に click/focus と
-/// オーバーレイ除去を済ませている(§9)ため、ここでは中心状態とモードインジケータの更新に
-/// 留める(§6・§5-2)。ハンドラ名の登録・page.js 注入は `webview::build`(§4)が担う。
+/// page.js が送るメッセージを `hints::parse_hint_message` で解釈し、モードを遷移させる。JS 側は
+/// 既に click/focus とオーバーレイ除去を済ませている(§9・§10)ため、ここでは中心状態と
+/// モードインジケータの更新に留める(§6・§5-2)。ハンドラ名の登録・page.js 注入は
+/// `webview::build`(§4)が担う。
 ///
-/// **hint 結果は Hint モード中のみ受理する**(要求 3.3・§9)。`"owl"` ハンドラは main world・
-/// 全フレームに公開されるため、任意のページ(クロスオリジン iframe 含む)が hint 未使用時に
-/// `hint_result` を送って owl を勝手に Insert 等へ遷移させられる。これを防ぐため現モードが
-/// Hint でなければ黙って無視する(CLAUDE.md 規約 1: 安全側へ倒す)。main world 注入自体の
-/// 改ざんリスクは MVP では許容する(§17)。
+/// **ページ起因の偽装遷移を防ぐため、メッセージ種別ごとに「受理する現モード」を検証する**
+/// (要求 3.3・§9・§10、CLAUDE.md 規約 6: 現在の状態で妥当か確認してから作用する)。`"owl"`
+/// ハンドラは main world・全フレームに公開され、任意のページ(クロスオリジン iframe 含む)が
+/// 偽装しうる:
+/// - hint 結果(`Link`/`Input`/`None`)は **Hint モード中のみ**受理する(§9)。
+/// - §10 のクリック focus(`Focus`)は **Normal モード中のみ**受理する(§10: 「Normal で
+///   これを受けたら Insert へ」)。これにより Command/Hint/Insert 中の偽装 focus を弾く。
+///
+/// なお page.js 経由の main world 注入自体の改ざん、および Normal 中に `focus` を偽装して Insert を
+/// 強制する経路までは防げない(要求 3.3 の「スクリプト起因で Insert に入らない」の残余リスク)。
+/// `Esc` で必ず Normal へ復帰できるため実害は限定的で、MVP では許容する(§17)。
 fn install_hint_message_handler(
     web_view: &WebView,
     mode_label: &Label,
@@ -349,16 +355,19 @@ fn install_hint_message_handler(
     content_manager.connect_script_message_received(
         Some(HINT_MESSAGE_HANDLER),
         move |_manager, value| {
-            let next = match hints::parse_hint_message(value.to_str().as_str()) {
-                // §9.2: リンククリック済み/候補 0 件は Normal へ。
-                HintMessage::Link | HintMessage::None => Mode::Normal,
-                // §9.2: テキスト入力欄 focus 済みは Insert へ。
-                HintMessage::Input => Mode::Insert,
-                // 未知メッセージ(M6 の focus 等・壊れた JSON)は無視する。
+            // 各メッセージを (受理する現モード, 遷移先モード) の対にする。現モードが `require` で
+            // ないときは黙って無視する(規約 6)。
+            let (require, next) = match hints::parse_hint_message(value.to_str().as_str()) {
+                // §9.2: リンククリック済み/候補 0 件は Hint 中のみ受理し Normal へ。
+                HintMessage::Link | HintMessage::None => (Mode::Hint, Mode::Normal),
+                // §9.2: テキスト入力欄 focus 済みは Hint 中のみ受理し Insert へ。
+                HintMessage::Input => (Mode::Hint, Mode::Insert),
+                // §10: クリック focus は Normal 中のみ受理し Insert へ。
+                HintMessage::Focus => (Mode::Normal, Mode::Insert),
+                // 未知メッセージ・壊れた JSON は無視する。
                 HintMessage::Ignore => return,
             };
-            // 要求 3.3・§9: hint 結果は Hint モード中のみ有効。ページ起因の偽装遷移を防ぐ。
-            if state.get().mode != Mode::Hint {
+            if state.get().mode != require {
                 return;
             }
             mode_label.set_text(keys::mode_indicator(next));
