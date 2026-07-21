@@ -1,7 +1,7 @@
 // owl page.js — ページへ常駐注入する UserScript(設計書 §9・§10)。
 //
-// document-start・全フレームで注入され(§10)、hint 機能を提供する。§10 の focus 監視
-// (insert 自動移行)は M6 で本ファイルに追加する。
+// document-start・全フレームで注入され(§10)、hint 機能と §10 の focus 監視(insert 自動移行)を
+// 提供する。
 //
 // 役割分担(§9.1): クリック可能要素の列挙・ラベル採番・オーバーレイ描画・絞り込み・
 // 確定時の click/focus は JS(このファイル)が担う。キー入力の受付とモード遷移は Rust 側。
@@ -21,6 +21,11 @@
 
   // hint セッションの状態。
   var state = { active: false, hints: [], buffer: "" };
+
+  // §10: 直近のユーザー mousedown のタイムスタンプ(insert 自動移行の相関判定に使う)。
+  var lastMouseDown = 0;
+  // §10: mousedown から focusin までを「ユーザー起因の focus」とみなす窓(ミリ秒)。
+  var FOCUS_WINDOW_MS = 200;
 
   // §9.2: JS → Rust。ハンドラ未登録(about: 等)でも例外にしない。
   function post(obj) {
@@ -223,4 +228,47 @@
   }
 
   window.owlHints = { start: start, input: input, cancel: cancel };
+
+  // §10: insert 自動移行。ユーザー操作起因の focus でのみ owl へ通知し、`autofocus`・スクリプト
+  // 起因(`element.focus()`)では通知しない(要求 3.3)。capture でページより先に観測する。
+  //
+  // 相関判定: mousedown のタイムスタンプを記録し、focusin が直近 FOCUS_WINDOW_MS 以内かつ対象が
+  // editable(§10: `isEditable`)のときのみ `{"type":"focus","editable":true}` を送る。owl は Normal
+  // のときだけこれを受けて Insert へ遷移する(§10、検証は Rust 側)。
+  //
+  // hint 確定の `.focus()`(§9)はスクリプト起因で mousedown を伴わないため、ここでは通知されない
+  // (二重遷移しない)。hint 側は自前の `hint_result:input` で Insert へ遷移する。
+  //
+  // ユーザー起因 focus を送る(規約 6: 送信側で条件を満たすもののみ)。owl 側は Normal のときだけ受理する。
+  function notifyUserFocus() {
+    post({ type: "focus", editable: true });
+  }
+  document.addEventListener(
+    "mousedown",
+    function (e) {
+      lastMouseDown = Date.now();
+      // `focusin` は focus が**移動したとき**だけ発火する。既に focus 済みの入力欄を再クリック
+      // (`autofocus` 済みの欄を初めてクリックする場合も含む)しても focusin は来ないため、この
+      // 経路を取りこぼさないよう mousedown 時に「クリック先が既に focus 済みの editable」なら即通知する。
+      var active = document.activeElement;
+      if (
+        active &&
+        isEditable(active) &&
+        e.target &&
+        (active === e.target || active.contains(e.target))
+      ) {
+        notifyUserFocus();
+      }
+    },
+    true,
+  );
+  document.addEventListener(
+    "focusin",
+    function (e) {
+      if (Date.now() - lastMouseDown > FOCUS_WINDOW_MS) return;
+      if (!e.target || !isEditable(e.target)) return;
+      notifyUserFocus();
+    },
+    true,
+  );
 })();
